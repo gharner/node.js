@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+     <title>Node.js Sandbox Route List</title>
+</head>
+
+<body>
+     <ul>
+          <% routes.forEach(function(route) { %>
+               <li>
+                    <%= route.method %>
+                         <%= route.path %>
+               </li>
+               <% }); %>
+     </ul>
+</body>
+
+</html>
