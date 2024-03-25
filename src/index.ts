@@ -6,6 +6,13 @@ import { dailyJobs } from './controller/gizmo';
 import * as functions from 'firebase-functions';
 import { admin } from './middleware/firebase';
 import * as path from 'path';
+import { config } from 'dotenv';
+
+const projectId = process.env.GCLOUD_PROJECT;
+const envFilePath = projectId === 'valiant-splicer-224515' ? '.env.prod' : '.env.dev';
+
+// Load the environment variables
+config({ path: envFilePath });
 
 const app = Express();
 app.use(cors);
@@ -60,3 +67,13 @@ export const onAddSandboxDocument = functions.firestore.document('sandbox-docume
 });
 
 export const routeList = allRoutesDetails;
+
+export const currentEnviroment = functions.https.onRequest((request, response) => {
+	const envVars = Object.keys(process.env).reduce<{ [key: string]: string | undefined }>((acc, key) => {
+		acc[key] = process.env[key];
+
+		return acc;
+	}, {});
+
+	response.json(envVars);
+});

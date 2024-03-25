@@ -6,18 +6,26 @@ import { xml2json } from 'xml-js';
 import { GaxiosResponse } from 'gaxios';
 import { logger } from 'firebase-functions';
 
-export const googleLogin = (request: Request, response: Response) => {
-	const SCOPES = process.env.SCOPES;
+export const googleLogin = (request: Request, response: Response): void => {
+	try {
+		const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, process.env.REDIRECT_URI);
 
-	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, process.env.REDIRECT_URI);
+		const authUrl = oAuth2Client.generateAuthUrl({
+			access_type: 'offline',
+			scope: process.env.SCOPES,
+			prompt: 'consent',
+		});
 
-	const authUrl = oAuth2Client.generateAuthUrl({
-		access_type: 'offline',
-		scope: SCOPES,
-		prompt: 'consent',
-	});
-	response.set('Cache-Control', 'private, max-age=0, s-maxage=0');
-	response.send(authUrl);
+		// Setting cache control headers for privacy and freshness
+		response.set('Cache-Control', 'private, max-age=0, s-maxage=0');
+
+		// Explicitly setting the response status for clarity
+		response.status(200).send(authUrl);
+	} catch (error) {
+		logger.error('Failed to generate Google Auth URL', error);
+		// Respond with an internal server error status code
+		response.status(500).send('Internal Server Error');
+	}
 };
 
 export const oAuthCallback = async (request: Request, response: Response) => {
