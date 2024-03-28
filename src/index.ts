@@ -68,7 +68,7 @@ export const onAddSandboxDocument = functions.firestore.document('sandbox-docume
 
 export const routeList = allRoutesDetails;
 
-export const currentEnviroment = functions.https.onRequest((request, response) => {
+/* export const currentEnviroment = functions.https.onRequest((request, response) => {
 	const envVars = Object.keys(process.env).reduce<{ [key: string]: string | undefined }>((acc, key) => {
 		acc[key] = process.env[key];
 
@@ -76,4 +76,4 @@ export const currentEnviroment = functions.https.onRequest((request, response) =
 	}, {});
 
 	response.json(envVars);
-});
+}); */
