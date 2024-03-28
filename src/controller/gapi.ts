@@ -84,10 +84,13 @@ export const accessToken = async (request: Request, response: Response) => {
 			token?: string | null;
 			res?: GaxiosResponse | null;
 		};
+		logger.log(credentials);
 
 		const token = credentials.token;
+		logger.log(token);
 
 		const info = await oAuth2Client.getTokenInfo(<string>token);
+		logger.log(info);
 
 		const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', info.email).get();
 		const accountData = (await accountByEmail).docs.pop()?.data();
