@@ -5,34 +5,17 @@ import { routes } from './routes';
 import { dailyJobs } from './controller/gizmo';
 import * as functions from 'firebase-functions';
 import { admin } from './middleware/firebase';
-import * as path from 'path';
-import { config } from 'dotenv';
-
-const projectId = process.env.GCLOUD_PROJECT;
-const envFilePath = projectId === 'valiant-splicer-224515' ? '.env.prod' : '.env.dev';
-
-// Load the environment variables
-config({ path: envFilePath });
-
-const app = Express();
-app.use(cors);
-app.set('views', path.join(__dirname, 'views'));
-app.set('view engine', 'ejs');
-
-const allRoutesDetails: any[] = [];
 
 // REST API routes
 routes.forEach((routerObj: IRoutes) => {
+	const app = Express();
+
+	// add cors middleware
+	app.use(cors);
+
 	// export routes individually for cloud functions
 	app.use(routerObj.router);
 	exports[routerObj.name] = functions.https.onRequest(app);
-
-	// add the routes info to the array
-	if (routerObj.routesInfo) {
-		const routesWithBasePath = routerObj.routesInfo.map(route => ({ ...route, path: `/${routerObj.name}${route.path}`, route: routerObj.name }));
-
-		allRoutesDetails.push(...routesWithBasePath);
-	}
 });
 
 export const scheduledFunction = functions.pubsub.schedule('0 9 * * 1-5').onRun(() => {
@@ -66,14 +49,27 @@ export const onAddSandboxDocument = functions.firestore.document('sandbox-docume
 	});
 });
 
-export const routeList = allRoutesDetails;
+export const currentEnvironment = functions.https.onRequest((request, response) => {
+	const keysOfInterest = ['REDIRECT_URI', 'NODE_ENV', 'PWD', 'HOME', 'FIREBASE_CONFIG', 'GCLOUD_PROJECT'];
 
-/* export const currentEnviroment = functions.https.onRequest((request, response) => {
-	const envVars = Object.keys(process.env).reduce<{ [key: string]: string | undefined }>((acc, key) => {
-		acc[key] = process.env[key];
-
+	let envVars = keysOfInterest.reduce<{ [key: string]: string | undefined }>((acc, key) => {
+		if (process.env[key] !== undefined) {
+			acc[key] = process.env[key];
+		}
 		return acc;
 	}, {});
 
+	// Parse FIREBASE_CONFIG if it exists and is valid JSON, then merge it
+	if (envVars.FIREBASE_CONFIG) {
+		try {
+			const firebaseConfig = JSON.parse(envVars.FIREBASE_CONFIG);
+			// Remove the stringified FIREBASE_CONFIG to avoid redundancy
+			delete envVars.FIREBASE_CONFIG;
+			envVars = { ...envVars, ...firebaseConfig };
+		} catch (error) {
+			console.error('Error parsing FIREBASE_CONFIG:', error);
+		}
+	}
+
 	response.json(envVars);
-}); */
+});

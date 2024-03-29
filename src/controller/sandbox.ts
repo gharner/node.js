@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
-import { routeList } from '..';
 
-export const list_routes = async (request: Request, response: Response): Promise<void> => {
+/* export const list_routes = async (request: Request, response: Response): Promise<void> => {
 	const { route } = request.params;
 
 	let payload = route ? routeList.filter(f => f.route === route) : routeList;
@@ -10,7 +9,7 @@ export const list_routes = async (request: Request, response: Response): Promise
 	response.send(data);
 
 	//response.render('index', { routes: payload });
-};
+}; */
 
 export const space_station = (request: Request, response: Response) => {
 	const axios = require('axios');
