@@ -23,13 +23,19 @@ export const googleLogin = (request: Request, response: Response) => {
 export const oAuthCallback = async (request: Request, response: Response) => {
 	const { query: { error, code } = {} } = request;
 
+	// what firebase project is initialized?
+	logger.log(admin);
+
 	// User may deny access to the application.
 	if (error) {
 		response.status(500).send(error);
 		return;
 	}
 
-	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, process.env.REDIRECT_URI);
+	// I'm trying to get this to work with the emulator. It currently does not work.
+	const REDIRECT = process.env.FUNCTIONS_EMULATOR ? 'http://127.0.0.1:5001/gregharner-84eb9/us-central1/gapi/oAuthCallback' : process.env.REDIRECT_URI;
+
+	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
 
 	// Exchange the authorization code for an access token.
 	const { tokens } = await oAuth2Client.getToken(<string>code);
@@ -48,7 +54,10 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 	// Store the refresh token in the Firestore database.
 	// Set merge: true to not overwrite any other data in the same document
 	const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', email).get();
+
 	const accountData = (await accountByEmail).docs.pop()?.data();
+	logger.log(accountData);
+
 	const account = accountData?.id;
 
 	try {
@@ -68,14 +77,19 @@ export const accessToken = async (request: Request, response: Response) => {
 	const refresh_token = { refresh_token: <string>gapirefreshtoken };
 
 	try {
-		const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, process.env.REDIRECT_URI);
+		const REDIRECT = process.env.FUNCTIONS_EMULATOR ? 'http://127.0.0.1:5001/gregharner-84eb9/us-central1/gapi/oAuthCallback' : process.env.REDIRECT_URI;
+
+		const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
 
 		oAuth2Client.setCredentials(refresh_token);
 
 		const credentials = (await oAuth2Client.getAccessToken()) as {
 			token?: string | null;
 			res?: GaxiosResponse | null;
+			errorRedactor?: false;
 		};
+
+		logger.log(`credentials=${credentials}`);
 
 		const token = credentials.token;
 

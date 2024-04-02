@@ -1,19 +1,14 @@
 import Express from 'express';
+import * as functions from 'firebase-functions';
+import { dailyJobs } from './controller/gizmo';
 import { IRoutes } from './interfaces';
 import { cors } from './middleware/cors';
-import { routes } from './routes';
-import { dailyJobs } from './controller/gizmo';
-import * as functions from 'firebase-functions';
 import { admin } from './middleware/firebase';
+import { routes } from './routes';
 
-// REST API routes
 routes.forEach((routerObj: IRoutes) => {
 	const app = Express();
-
-	// add cors middleware
 	app.use(cors);
-
-	// export routes individually for cloud functions
 	app.use(routerObj.router);
 	exports[routerObj.name] = functions.https.onRequest(app);
 });
@@ -50,26 +45,14 @@ export const onAddSandboxDocument = functions.firestore.document('sandbox-docume
 });
 
 export const currentEnvironment = functions.https.onRequest((request, response) => {
-	const keysOfInterest = ['REDIRECT_URI', 'NODE_ENV', 'PWD', 'HOME', 'FIREBASE_CONFIG', 'GCLOUD_PROJECT'];
+	const keysToExclude: string[] = ['CLIENT_SECRET', 'DATABASE_PASSWORD', 'API_KEY', 'CLIENT_ID'];
 
-	let envVars = keysOfInterest.reduce<{ [key: string]: string | undefined }>((acc, key) => {
-		if (process.env[key] !== undefined) {
+	let envVars: { [key: string]: string | undefined } = Object.keys(process.env).reduce<{ [key: string]: string | undefined }>((acc, key) => {
+		if (!keysToExclude.includes(key)) {
 			acc[key] = process.env[key];
 		}
 		return acc;
 	}, {});
-
-	// Parse FIREBASE_CONFIG if it exists and is valid JSON, then merge it
-	if (envVars.FIREBASE_CONFIG) {
-		try {
-			const firebaseConfig = JSON.parse(envVars.FIREBASE_CONFIG);
-			// Remove the stringified FIREBASE_CONFIG to avoid redundancy
-			delete envVars.FIREBASE_CONFIG;
-			envVars = { ...envVars, ...firebaseConfig };
-		} catch (error) {
-			console.error('Error parsing FIREBASE_CONFIG:', error);
-		}
-	}
 
 	response.json(envVars);
 });
