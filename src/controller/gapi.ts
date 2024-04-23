@@ -6,6 +6,193 @@ import { xml2json } from 'xml-js';
 import { GaxiosResponse } from 'gaxios';
 import { logger } from 'firebase-functions';
 
+// Using GAPI authorization URL get token information and store it in Firecloud
+export const accessToken = async (request: Request, response: Response) => {
+	const gapirefreshtoken = request.headers.gapirefreshtoken;
+	const refresh_token = { refresh_token: <string>gapirefreshtoken };
+
+	try {
+		const REDIRECT = process.env.FUNCTIONS_EMULATOR ? 'http://127.0.0.1:5001/gregharner-84eb9/us-central1/gapi/oAuthCallback' : process.env.REDIRECT_URI;
+
+		const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
+
+		oAuth2Client.setCredentials(refresh_token);
+
+		const credentials = (await oAuth2Client.getAccessToken()) as {
+			token?: string | null;
+			res?: GaxiosResponse | null;
+			errorRedactor?: false;
+		};
+
+		logger.log(`credentials=${credentials}`);
+
+		const token = credentials.token;
+
+		const info = await oAuth2Client.getTokenInfo(<string>token);
+
+		const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', info.email).get();
+		const accountData = (await accountByEmail).docs.pop()?.data();
+		const account = accountData?.id;
+
+		const accountsCollection = admin.firestore().collection('mas-accounts');
+		await accountsCollection.doc(<string>account).set({ mas: { gapi: { token: credentials.res?.data } } }, { merge: true });
+
+		response.status(200).send(token);
+	} catch (error: any) {
+		response.status(400).send(error);
+	}
+};
+
+//! This will add a group buy I need a shared directory group
+export const addGroup = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { email } = request.headers;
+	const { group } = request.headers;
+
+	var options = {
+		method: 'POST',
+		hostname: 'admin.googleapis.com',
+		path: `/admin/directory/v1/groups/`,
+
+		headers: {
+			Authorization: `Bearer ${bearer}`,
+		},
+	};
+
+	const callback = (res: any) => {
+		var data = '';
+
+		res.on('data', (chunk: any) => {
+			data += chunk;
+		});
+
+		res.on('end', () => {
+			response.send(data);
+		});
+
+		res.on('error', (error: any) => {
+			logger.log(error);
+		});
+	};
+
+	const postData = JSON.stringify({
+		email: email,
+		name: group,
+	});
+
+	const req = https.request(options, callback);
+	req.write(postData);
+	req.end();
+};
+
+// Add member to group given in request header
+export const addMember = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { email } = request.headers;
+	const { group } = request.headers;
+
+	var options = {
+		method: 'POST',
+		hostname: 'admin.googleapis.com',
+		path: `/admin/directory/v1/groups/${group}/members`,
+
+		headers: {
+			Authorization: `Bearer ${bearer}`,
+		},
+	};
+
+	const callback = (res: any) => {
+		var data = '';
+
+		res.on('data', (chunk: any) => {
+			data += chunk;
+		});
+
+		res.on('end', () => {
+			response.send(data);
+		});
+
+		res.on('error', (error: any) => {
+			logger.log(error);
+		});
+	};
+
+	const postData = JSON.stringify({
+		email: email,
+	});
+
+	const req = https.request(options, callback);
+	req.write(postData);
+	req.end();
+};
+
+// get the member of the Domain Directory
+export const directory = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+
+	var options = {
+		method: 'GET',
+		hostname: 'www.google.com',
+		path: `/m8/feeds/contacts/yongsa.net/full`,
+
+		headers: {
+			Authorization: `Bearer ${bearer}`,
+		},
+	};
+
+	const callback = (result: any) => {
+		let str = '';
+
+		//another chunk of data has been received, so append it to `str`
+		result.on('data', (chunk: any) => {
+			str += chunk;
+		});
+
+		//the whole response has been received, so we just print it out here
+		result.on('end', () => {
+			const obj: any = xml2json(str, { compact: true, spaces: 2 });
+			response.send(obj);
+		});
+	};
+
+	https.request(options, callback).end();
+};
+
+// Get events from the Yongsa shared calendar
+export const events = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { calendar } = request.headers;
+	const { start } = request.headers;
+	const { filter } = request.headers;
+
+	var options = {
+		method: 'GET',
+		hostname: 'www.googleapis.com',
+		path: `/calendar/v3/calendars/${calendar}/events?maxResults=2500&singleEvents=true&q=${filter?.toString().replace(' ', '%20')}&timeMin=${start}`,
+
+		headers: {
+			Authorization: `Bearer ${bearer}`,
+		},
+	};
+
+	const callback = (result: any) => {
+		let str = '';
+
+		//another chunk of data has been received, so append it to `str`
+		result.on('data', (chunk: any) => {
+			str += chunk;
+		});
+
+		//the whole response has been received, so we just print it out here
+		result.on('end', () => {
+			response.send(str);
+		});
+	};
+
+	https.request(options, callback).end();
+};
+
+// Get a URL to initialize GAPI authorization routine
 export const googleLogin = (request: Request, response: Response) => {
 	const SCOPES = process.env.SCOPES;
 
@@ -20,6 +207,71 @@ export const googleLogin = (request: Request, response: Response) => {
 	response.send(authUrl);
 };
 
+// Get Google Group information
+export const group = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { group } = request.headers;
+
+	var options = {
+		method: 'GET',
+		hostname: 'admin.googleapis.com',
+		path: `admin.googleapis.com/admin/directory/v1/groups/${group}`,
+
+		headers: {
+			Authorization: `Bearer ${bearer}`,
+		},
+	};
+
+	const callback = (result: any) => {
+		let str = '';
+
+		//another chunk of data has been received, so append it to `str`
+		result.on('data', (chunk: any) => {
+			str += chunk;
+		});
+
+		//the whole response has been received, so we just print it out here
+		result.on('end', () => {
+			response.send(str);
+		});
+	};
+
+	https.request(options, callback).end();
+};
+
+// Get Google Group Members information
+export const members = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { group } = request.headers;
+	const { nextPage } = request.headers;
+
+	var options = {
+		method: 'GET',
+		hostname: 'admin.googleapis.com',
+		path: `/admin/directory/v1/groups/${group}/members?&maxResults=2500&nextPageToken=${nextPage}`,
+		headers: {
+			Authorization: `Bearer ${bearer}`,
+		},
+	};
+
+	const callback = (result: any) => {
+		let str = '';
+
+		//another chunk of data has been received, so append it to `str`
+		result.on('data', (chunk: any) => {
+			str += chunk;
+		});
+
+		//the whole response has been received, so we just print it out here
+		result.on('end', () => {
+			response.send(str);
+		});
+	};
+
+	https.request(options, callback).end();
+};
+
+// Handles to redirect url callback
 export const oAuthCallback = async (request: Request, response: Response) => {
 	const { query: { error, code } = {} } = request;
 
@@ -72,144 +324,7 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 	}
 };
 
-export const accessToken = async (request: Request, response: Response) => {
-	const gapirefreshtoken = request.headers.gapirefreshtoken;
-	const refresh_token = { refresh_token: <string>gapirefreshtoken };
-
-	try {
-		const REDIRECT = process.env.FUNCTIONS_EMULATOR ? 'http://127.0.0.1:5001/gregharner-84eb9/us-central1/gapi/oAuthCallback' : process.env.REDIRECT_URI;
-
-		const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
-
-		oAuth2Client.setCredentials(refresh_token);
-
-		const credentials = (await oAuth2Client.getAccessToken()) as {
-			token?: string | null;
-			res?: GaxiosResponse | null;
-			errorRedactor?: false;
-		};
-
-		logger.log(`credentials=${credentials}`);
-
-		const token = credentials.token;
-
-		const info = await oAuth2Client.getTokenInfo(<string>token);
-
-		const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', info.email).get();
-		const accountData = (await accountByEmail).docs.pop()?.data();
-		const account = accountData?.id;
-
-		const accountsCollection = admin.firestore().collection('mas-accounts');
-		await accountsCollection.doc(<string>account).set({ mas: { gapi: { token: credentials.res?.data } } }, { merge: true });
-
-		response.status(200).send(token);
-	} catch (error: any) {
-		response.status(400).send(error);
-	}
-};
-
-export const members = async (request: Request, response: Response) => {
-	const { bearer } = request.headers;
-	const { group } = request.headers;
-	const { nextPage } = request.headers;
-
-	var options = {
-		method: 'GET',
-		hostname: 'admin.googleapis.com',
-		path: `/admin/directory/v1/groups/${group}/members?&maxResults=2500&nextPageToken=${nextPage}`,
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (result: any) => {
-		let str = '';
-
-		//another chunk of data has been received, so append it to `str`
-		result.on('data', (chunk: any) => {
-			str += chunk;
-		});
-
-		//the whole response has been received, so we just print it out here
-		result.on('end', () => {
-			response.send(str);
-		});
-	};
-
-	https.request(options, callback).end();
-};
-
-export const group = async (request: Request, response: Response) => {
-	const { bearer } = request.headers;
-	const { group } = request.headers;
-
-	var options = {
-		method: 'GET',
-		hostname: 'admin.googleapis.com',
-		path: `admin.googleapis.com/admin/directory/v1/groups/${group}`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (result: any) => {
-		let str = '';
-
-		//another chunk of data has been received, so append it to `str`
-		result.on('data', (chunk: any) => {
-			str += chunk;
-		});
-
-		//the whole response has been received, so we just print it out here
-		result.on('end', () => {
-			response.send(str);
-		});
-	};
-
-	https.request(options, callback).end();
-};
-
-export const addMember = async (request: Request, response: Response) => {
-	const { bearer } = request.headers;
-	const { email } = request.headers;
-	const { group } = request.headers;
-
-	var options = {
-		method: 'POST',
-		hostname: 'admin.googleapis.com',
-		path: `/admin/directory/v1/groups/${group}/members`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (res: any) => {
-		var data = '';
-
-		res.on('data', (chunk: any) => {
-			data += chunk;
-		});
-
-		res.on('end', () => {
-			response.send(data);
-		});
-
-		res.on('error', (error: any) => {
-			logger.log(error);
-		});
-	};
-
-	const postData = JSON.stringify({
-		email: email,
-	});
-
-	const req = https.request(options, callback);
-	req.write(postData);
-	req.end();
-};
-
+// Remove member from group given in request header
 export const removeMember = async (request: Request, response: Response) => {
 	const { bearer } = request.headers;
 	const { email } = request.headers;
@@ -238,70 +353,6 @@ export const removeMember = async (request: Request, response: Response) => {
 
 		res.on('error', (error: any) => {
 			logger.log(error);
-		});
-	};
-
-	https.request(options, callback).end();
-};
-
-export const events = async (request: Request, response: Response) => {
-	const { bearer } = request.headers;
-	const { calendar } = request.headers;
-	const { start } = request.headers;
-	const { filter } = request.headers;
-
-	var options = {
-		method: 'GET',
-		hostname: 'www.googleapis.com',
-		path: `/calendar/v3/calendars/${calendar}/events?maxResults=2500&singleEvents=true&q=${filter?.toString().replace(' ', '%20')}&timeMin=${start}`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (result: any) => {
-		let str = '';
-
-		//another chunk of data has been received, so append it to `str`
-		result.on('data', (chunk: any) => {
-			str += chunk;
-		});
-
-		//the whole response has been received, so we just print it out here
-		result.on('end', () => {
-			response.send(str);
-		});
-	};
-
-	https.request(options, callback).end();
-};
-
-export const directory = async (request: Request, response: Response) => {
-	const { bearer } = request.headers;
-
-	var options = {
-		method: 'GET',
-		hostname: 'www.google.com',
-		path: `/m8/feeds/contacts/yongsa.net/full`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (result: any) => {
-		let str = '';
-
-		//another chunk of data has been received, so append it to `str`
-		result.on('data', (chunk: any) => {
-			str += chunk;
-		});
-
-		//the whole response has been received, so we just print it out here
-		result.on('end', () => {
-			const obj: any = xml2json(str, { compact: true, spaces: 2 });
-			response.send(obj);
 		});
 	};
 
