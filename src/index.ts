@@ -4,6 +4,7 @@ import { dailyJobs } from './controller/gizmo';
 import { IRoutes } from './interfaces';
 import { cors } from './middleware/cors';
 import { routes } from './routes';
+import { onAddSandboxDocument } from './controller/sandbox';
 
 routes.forEach((routerObj: IRoutes) => {
 	const app = Express();
@@ -38,3 +39,5 @@ export const currentEnvironment = functions.https.onRequest((request, response) 
 		response.json(envVars);
 	});
 });
+
+export { onAddSandboxDocument };

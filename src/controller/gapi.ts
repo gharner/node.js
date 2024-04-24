@@ -24,7 +24,9 @@ export const accessToken = async (request: Request, response: Response) => {
 			errorRedactor?: false;
 		};
 
-		logger.log(`credentials=${credentials}`);
+		if (process.env.FUNCTIONS_EMULATOR) {
+			logger.log(`credentials=${JSON.stringify(credentials, null, 2)}`);
+		}
 
 		const token = credentials.token;
 
@@ -43,7 +45,6 @@ export const accessToken = async (request: Request, response: Response) => {
 	}
 };
 
-//! This will add a group buy I need a shared directory group
 export const addGroup = async (request: Request, response: Response) => {
 	const { bearer } = request.headers;
 	const { email } = request.headers;
@@ -196,13 +197,20 @@ export const events = async (request: Request, response: Response) => {
 export const googleLogin = (request: Request, response: Response) => {
 	const SCOPES = process.env.SCOPES;
 
-	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, process.env.REDIRECT_URI);
+	const REDIRECT = process.env.FUNCTIONS_EMULATOR ? `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT}/us-central1/gapi/oAuthCallback` : process.env.REDIRECT_URI;
+
+	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
 
 	const authUrl = oAuth2Client.generateAuthUrl({
 		access_type: 'offline',
 		scope: SCOPES,
 		prompt: 'consent',
 	});
+
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(authUrl);
+	}
+
 	response.set('Cache-Control', 'private, max-age=0, s-maxage=0');
 	response.send(authUrl);
 };
@@ -245,10 +253,16 @@ export const members = async (request: Request, response: Response) => {
 	const { group } = request.headers;
 	const { nextPage } = request.headers;
 
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(`credentials=${bearer}`);
+		logger.log(`credentials=${group}`);
+		logger.log(`credentials=${nextPage}`);
+	}
+
 	var options = {
 		method: 'GET',
 		hostname: 'admin.googleapis.com',
-		path: `/admin/directory/v1/groups/${group}/members?&maxResults=2500&nextPageToken=${nextPage}`,
+		path: `/admin/directory/v1/groups/${group}/members?maxResults=2500` + (nextPage ? `&pageToken=${nextPage}` : ''),
 		headers: {
 			Authorization: `Bearer ${bearer}`,
 		},
@@ -276,7 +290,9 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 	const { query: { error, code } = {} } = request;
 
 	// what firebase project is initialized?
-	logger.log(admin);
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log('admin', admin);
+	}
 
 	// User may deny access to the application.
 	if (error) {
@@ -284,8 +300,7 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 		return;
 	}
 
-	// I'm trying to get this to work with the emulator. It currently does not work.
-	const REDIRECT = process.env.FUNCTIONS_EMULATOR ? 'http://127.0.0.1:5001/gregharner-84eb9/us-central1/gapi/oAuthCallback' : process.env.REDIRECT_URI;
+	const REDIRECT = process.env.FUNCTIONS_EMULATOR ? `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT}/us-central1/gapi/oAuthCallback` : process.env.REDIRECT_URI;
 
 	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
 
@@ -304,16 +319,20 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 	const { email } = data;
 
 	// Store the refresh token in the Firestore database.
-	// Set merge: true to not overwrite any other data in the same document
 	const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', email).get();
 
 	const accountData = (await accountByEmail).docs.pop()?.data();
-	logger.log(accountData);
+
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(accountData);
+	}
 
 	const account = accountData?.id;
 
 	try {
 		const accountsCollection = admin.firestore().collection('mas-accounts');
+
+		// Set merge: true to not overwrite any other data in the same document
 		await accountsCollection.doc(<string>account).set({ mas: { gapi: { user: data, token: tokens } } }, { merge: true });
 
 		const html_response =
@@ -357,4 +376,65 @@ export const removeMember = async (request: Request, response: Response) => {
 	};
 
 	https.request(options, callback).end();
+};
+
+export const sharedContact = async (request: Request, response: Response) => {
+	const { email, name } = request.body;
+	const { bearer } = request.headers;
+
+	if (!email || !name) {
+		response.status(400).send('Missing required fields');
+		return;
+	}
+
+	const contactXML = `
+		<atom:entry xmlns:atom='http://www.w3.org/2005/Atom'
+					xmlns:gd='http://schemas.google.com/g/2005'>
+			<atom:category scheme='http://schemas.google.com/g/2005#kind'
+				term='http://schemas.google.com/contact/2008#contact'/>
+			<gd:name>
+				<gd:fullName>${name}</gd:fullName>
+			</gd:name>
+			<gd:email rel='http://schemas.google.com/g/2005#work'
+				primary='true'
+				address='${email}' />
+		</atom:entry>`;
+
+	var options = {
+		method: 'POST',
+		hostname: 'www.google.com',
+		path: `/m8/feeds/contacts/default/full`,
+		headers: {
+			Authorization: `Bearer ${bearer}`,
+			'Content-Type': 'application/atom+xml',
+		},
+	};
+
+	const req = https.request(options, res => {
+		let str = '';
+
+		res.on('data', chunk => {
+			str += chunk;
+		});
+
+		res.on('end', () => {
+			try {
+				const obj = xml2json(str, { compact: true, spaces: 2 });
+				response.send(obj);
+			} catch (error) {
+				response.status(500).send('Failed to parse XML response');
+			}
+		});
+
+		res.on('error', error => {
+			response.status(500).send(`Error: ${error.message}`);
+		});
+	});
+
+	req.on('error', error => {
+		response.status(500).send(`Request Error: ${error.message}`);
+	});
+
+	req.write(contactXML);
+	req.end();
 };

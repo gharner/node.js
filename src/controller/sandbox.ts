@@ -22,16 +22,16 @@ export const space_station = (request: Request, response: Response) => {
 			response.send(error);
 		});
 };
-
 export const getFirecloudDocuments = async (request: Request, response: Response) => {
 	try {
-		logger.log(`request=${request}`);
+		const querySnapshot = await admin.firestore().collection('mas-parameters').get();
+		const documents = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-		const documents = admin.firestore().collection('mas-parameters').get();
-
+		logger.log(`documents=${JSON.stringify(documents)}`);
 		response.status(200).send(documents);
 	} catch (error: any) {
-		response.status(400).send(error);
+		logger.log('Error retrieving documents:', error); // Better error logging
+		response.status(400).send(error.message); // Send the error message for better client-side handling
 	}
 };
 
