@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { accessToken, addMember, directory, events, googleLogin, group, members, oAuthCallback, removeMember, sharedContact } from '../controller';
+import { accessToken, addMember, directory, events, googleLogin, group, members, oAuthCallback, removeMember, createSharedContact, removeSharedContact } from '../controller';
 import { IRoutes } from '../interfaces';
 
 const router = Router();
@@ -13,7 +13,8 @@ router.get('/group', group);
 router.get('/members', members);
 router.get('/oAuthCallback', oAuthCallback);
 router.get('/removeMember', removeMember);
-router.get('/sharedContact', sharedContact);
+router.post('/createSharedContact', createSharedContact);
+router.post('/removeSharedContact', removeSharedContact);
 export const gapi: IRoutes = {
 	name: 'gapi',
 	router,

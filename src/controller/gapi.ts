@@ -32,6 +32,10 @@ export const accessToken = async (request: Request, response: Response) => {
 
 		const info = await oAuth2Client.getTokenInfo(<string>token);
 
+		if (process.env.FUNCTIONS_EMULATOR) {
+			logger.log(`info=${JSON.stringify(info, null, 2)}`);
+		}
+
 		const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', info.email).get();
 		const accountData = (await accountByEmail).docs.pop()?.data();
 		const account = accountData?.id;
@@ -72,7 +76,7 @@ export const addGroup = async (request: Request, response: Response) => {
 		});
 
 		res.on('error', (error: any) => {
-			logger.log(error);
+			logger.log(`error=${JSON.stringify(error, null, 2)}`);
 		});
 	};
 
@@ -80,6 +84,10 @@ export const addGroup = async (request: Request, response: Response) => {
 		email: email,
 		name: group,
 	});
+
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
+	}
 
 	const req = https.request(options, callback);
 	req.write(postData);
@@ -114,13 +122,17 @@ export const addMember = async (request: Request, response: Response) => {
 		});
 
 		res.on('error', (error: any) => {
-			logger.log(error);
+			logger.error(`error=${JSON.stringify(error, null, 2)}`);
 		});
 	};
 
 	const postData = JSON.stringify({
 		email: email,
 	});
+
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
+	}
 
 	const req = https.request(options, callback);
 	req.write(postData);
@@ -254,9 +266,9 @@ export const members = async (request: Request, response: Response) => {
 	const { nextPage } = request.headers;
 
 	if (process.env.FUNCTIONS_EMULATOR) {
-		logger.log(`credentials=${bearer}`);
-		logger.log(`credentials=${group}`);
-		logger.log(`credentials=${nextPage}`);
+		logger.log(`bearer=${bearer}`);
+		logger.log(`group=${group}`);
+		logger.log(`nextPage=${nextPage}`);
 	}
 
 	var options = {
@@ -291,7 +303,7 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 
 	// what firebase project is initialized?
 	if (process.env.FUNCTIONS_EMULATOR) {
-		logger.log('admin', admin);
+		logger.log(`admin=${JSON.stringify(admin, null, 2)}`);
 	}
 
 	// User may deny access to the application.
@@ -371,70 +383,90 @@ export const removeMember = async (request: Request, response: Response) => {
 		});
 
 		res.on('error', (error: any) => {
-			logger.log(error);
+			logger.log(`error=${JSON.stringify(error, null, 2)}`);
 		});
 	};
 
 	https.request(options, callback).end();
 };
-
-export const sharedContact = async (request: Request, response: Response) => {
-	const { email, name } = request.body;
+export const createSharedContact = async (request: Request, response: Response) => {
 	const { bearer } = request.headers;
-
-	if (!email || !name) {
-		response.status(400).send('Missing required fields');
-		return;
-	}
+	const { email, name } = request.body;
 
 	const contactXML = `
-		<atom:entry xmlns:atom='http://www.w3.org/2005/Atom'
-					xmlns:gd='http://schemas.google.com/g/2005'>
-			<atom:category scheme='http://schemas.google.com/g/2005#kind'
-				term='http://schemas.google.com/contact/2008#contact'/>
-			<gd:name>
-				<gd:fullName>${name}</gd:fullName>
-			</gd:name>
-			<gd:email rel='http://schemas.google.com/g/2005#work'
-				primary='true'
-				address='${email}' />
-		</atom:entry>`;
+        <atom:entry xmlns:atom='http://www.w3.org/2005/Atom'
+                    xmlns:gd='http://schemas.google.com/g/2005'>
+            <atom:category scheme='http://schemas.google.com/g/2005#kind'
+                term='http://schemas.google.com/contact/2008#contact'/>
+            <gd:name>
+                <gd:fullName>${name}</gd:fullName>
+            </gd:name>
+            <gd:email rel='http://schemas.google.com/g/2005#work'
+                primary='true'
+                address='${email}' />
+        </atom:entry>`;
 
-	var options = {
+	const options = {
 		method: 'POST',
 		hostname: 'www.google.com',
-		path: `/m8/feeds/contacts/default/full`,
+		path: `/m8/feeds/contacts/yongsa.net/full`,
 		headers: {
 			Authorization: `Bearer ${bearer}`,
+			'GData-Version': 3.0,
 			'Content-Type': 'application/atom+xml',
 		},
 	};
 
 	const req = https.request(options, res => {
-		let str = '';
-
+		let data = '';
 		res.on('data', chunk => {
-			str += chunk;
+			data += chunk;
 		});
-
 		res.on('end', () => {
-			try {
-				const obj = xml2json(str, { compact: true, spaces: 2 });
-				response.send(obj);
-			} catch (error) {
-				response.status(500).send('Failed to parse XML response');
-			}
-		});
-
-		res.on('error', error => {
-			response.status(500).send(`Error: ${error.message}`);
+			console.log('Contact created successfully:', data);
 		});
 	});
 
 	req.on('error', error => {
-		response.status(500).send(`Request Error: ${error.message}`);
+		console.error('Error creating contact:', error);
 	});
 
 	req.write(contactXML);
+	req.end();
+};
+
+// For future use. currently untested and not implemented
+export const removeSharedContact = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { id } = request.body;
+
+	const options = {
+		method: 'DELETE',
+		hostname: 'www.google.com',
+		path: `/m8/feeds/contacts/yongsa.net/base/${id}`,
+		headers: {
+			Authorization: `OAuth ${bearer}`,
+			'If-Match': '*',
+		},
+		maxRedirects: 20,
+	};
+
+	const req = https.request(options, function (res) {
+		const chunks: Buffer[] = [];
+
+		res.on('data', function (chunk) {
+			chunks.push(chunk);
+		});
+
+		res.on('end', function () {
+			const body = Buffer.concat(chunks);
+			console.log(body.toString());
+		});
+
+		res.on('error', function (error) {
+			console.error(error);
+		});
+	});
+
 	req.end();
 };
