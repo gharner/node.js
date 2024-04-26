@@ -301,11 +301,6 @@ export const members = async (request: Request, response: Response) => {
 export const oAuthCallback = async (request: Request, response: Response) => {
 	const { query: { error, code } = {} } = request;
 
-	// what firebase project is initialized?
-	if (process.env.FUNCTIONS_EMULATOR) {
-		logger.log(`admin=${JSON.stringify(admin, null, 2)}`);
-	}
-
 	// User may deny access to the application.
 	if (error) {
 		response.status(500).send(error);
