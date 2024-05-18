@@ -1,19 +1,10 @@
-import { logger } from 'firebase-functions';
 import { Schedule } from '../interfaces';
 import { admin } from '../middleware/firebase';
-import { sendErrorEmail } from '../utilities/common';
-import { emailMessage } from '../interfaces/common';
-
+import { handleError } from '../utilities/common';
+import { EmailMessage } from '../interfaces/common';
 export const dailyJobs = async () => {
-	await getSchedules().catch(error => {
-		logger.error('Failed to get schedules: ', error);
-
-		const message = {
-			to: 'gh@yongsa.net',
-			message: { subject: 'gizmo error', text: `function errored processing the schedules` },
-		};
-
-		sendErrorEmail(message);
+	await getSchedules().catch(e => {
+		handleError(e, 'controller=>gizmo=>dailyJobs');
 	});
 };
 
@@ -34,15 +25,8 @@ async function getSchedules() {
 		const data = snapshot.docs.map(doc => doc.data()) as Schedule[];
 
 		processSchedules(data);
-	} catch (error) {
-		logger.error('Failed to fetch schedules: ', error);
-
-		const message = {
-			to: 'gh@yongsa.net',
-			message: { subject: 'gizmo error', text: `function errored processing the schedules` },
-		};
-
-		sendErrorEmail(message);
+	} catch (e) {
+		handleError(e, 'controller=>gizmo=>getSchedules');
 	}
 }
 
@@ -75,8 +59,8 @@ async function processSchedules(schedules: Schedule[]) {
 			for (const notify of uniqueNotifications.filter((f: { phone: string }) => f.phone)) {
 				await sendNotification('mas-twilio', notify.phone, '', schedule);
 			}
-		} catch (error) {
-			logger.error('Error processing schedule:', error);
+		} catch (e) {
+			handleError(e, 'controller=>quickbooks=>refresh_token');
 		}
 	}
 }
@@ -92,7 +76,7 @@ function getUniqueNotifications(notifications: any[]) {
 
 async function sendNotification(collection: string, to: string, bcc: string, schedule: Schedule) {
 	const startDate = dateLocalString(schedule.start.dateTime);
-	let message: emailMessage | { to: string; body: string };
+	let message: EmailMessage | { to: string; body: string };
 
 	if (collection === 'mas-email') {
 		message = {
@@ -112,15 +96,8 @@ async function sendNotification(collection: string, to: string, bcc: string, sch
 
 	try {
 		await admin.firestore().collection(collection).add(message);
-	} catch (error) {
-		logger.error('Failed to send notification: ', error);
-
-		message = {
-			to: 'gh@yongsa.net',
-			message: { subject: 'gizmo error', text: `function errored when trying to add the message to the collection.` },
-		};
-
-		sendErrorEmail(message);
+	} catch (e) {
+		handleError(e, 'controller=>quickbooks=>refresh_token');
 	}
 }
 

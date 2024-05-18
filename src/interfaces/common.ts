@@ -1,4 +1,4 @@
-export interface emailMessage {
+export interface EmailMessage {
 	to: string;
 	cc?: string;
 	bcc?: string;

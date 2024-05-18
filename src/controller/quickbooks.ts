@@ -6,7 +6,7 @@ import { qbToken } from '../interfaces';
 import { admin } from '../middleware/firebase';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
-import { sendErrorEmail, safeStringify } from '../utilities/common';
+import { handleError } from '../utilities/common';
 
 const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
 
@@ -16,24 +16,6 @@ const oauthClient = new OAuthClient({
 	environment: config.state === 'development' ? 'sandbox' : 'production',
 	redirectUri: config.redirect_uri,
 });
-
-const handleError = (response: Response, error: unknown, funcName: string) => {
-	if (error instanceof Error) {
-		const messageText = safeStringify(error, 2);
-
-		const emailMessage = {
-			to: 'gh@yongsa.net',
-			message: { subject: funcName, text: messageText },
-		};
-
-		sendErrorEmail(emailMessage);
-
-		response.status(500).send({ error: error.message });
-	} else {
-		logger.error('Unknown error:', safeStringify(error, 2));
-		response.status(500).send({ error: 'Internal Server Error' });
-	}
-};
 
 const isQbToken = (obj: any): obj is qbToken => {
 	return (
@@ -58,7 +40,7 @@ export const auth_request = (request: Request, response: Response) => {
 		response.send(auth_url);
 	} catch (e) {
 		logger.error(errorArray);
-		handleError(response, e, 'controller=>quickbooks=>auth_request');
+		handleError(e, 'controller=>quickbooks=>auth_request', response);
 	}
 };
 
@@ -107,7 +89,7 @@ export const auth_token = async (request: Request, response: Response) => {
 		response.send(htmlResponse);
 	} catch (e) {
 		logger.error(errorArray);
-		handleError(response, e, 'controller=>quickbooks=>auth_token');
+		handleError(e, 'controller=>quickbooks=>auth_token', response);
 	}
 };
 
@@ -136,7 +118,7 @@ export const get_updates = async (request: Request, response: Response) => {
 		const result: AxiosResponse = await axios(config);
 		response.send(result.data.QueryResponse);
 	} catch (e) {
-		handleError(response, e, 'controller=>quickbooks=>get_updates');
+		handleError(e, 'controller=>quickbooks=>get_updates', response);
 	}
 };
 
@@ -157,7 +139,7 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 		const result: AxiosResponse = await axios(config);
 		response.send(result.data.QueryResponse);
 	} catch (e) {
-		handleError(response, e, 'controller=>quickbooks=>getCustomerByEmail');
+		handleError(e, 'controller=>quickbooks=>getCustomerByEmail', response);
 	}
 };
 
@@ -166,6 +148,6 @@ export const refresh_token = async (request: Request, response: Response) => {
 		const authResponse = await oauthClient.refreshUsingToken(request.headers.refresh_token as string);
 		response.send(authResponse.getJson());
 	} catch (e) {
-		handleError(response, e, 'controller=>quickbooks=>refresh_token');
+		handleError(e, 'controller=>quickbooks=>refresh_token', response);
 	}
 };
