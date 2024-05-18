@@ -36,20 +36,24 @@ export const getFirecloudDocuments = async (request: Request, response: Response
 };
 
 export const onAddSandboxDocument = functions.firestore.document('sandbox-documents/{docId}').onCreate(async (snap, context) => {
-	functions.logger.debug(`Running add document course trigger for document ${context.params.docId}`);
+	logger.debug(`Running add document course trigger for document ${context.params.docId}`);
 
 	const db = admin.firestore();
 	const sandboxDoc = snap.data();
 
-	functions.logger.debug(sandboxDoc);
+	logger.debug(sandboxDoc);
 
 	db.runTransaction(async transaction => {
 		const ref = db.doc('chat-roles/admin');
 		const data = (await transaction.get(ref)).data() as any;
 		data.value = { name: 'Greg' };
 
-		functions.logger.debug(data);
+		logger.debug(data);
 
 		transaction.set(ref, data);
 	});
 });
+
+export const htmlExample = (request: Request, response: Response) => {
+	response.render('index', { title: 'Home Page' });
+};

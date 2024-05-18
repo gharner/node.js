@@ -1,4 +1,4 @@
-import https from 'https';
+import axios, { AxiosResponse } from 'axios';
 import { Request, Response } from 'express';
 import { admin } from '../middleware/firebase';
 import { google } from 'googleapis';
@@ -54,32 +54,6 @@ export const addGroup = async (request: Request, response: Response) => {
 	const { email } = request.headers;
 	const { group } = request.headers;
 
-	var options = {
-		method: 'POST',
-		hostname: 'admin.googleapis.com',
-		path: `/admin/directory/v1/groups/`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (res: any) => {
-		var data = '';
-
-		res.on('data', (chunk: any) => {
-			data += chunk;
-		});
-
-		res.on('end', () => {
-			response.send(data);
-		});
-
-		res.on('error', (error: any) => {
-			logger.log(`error=${JSON.stringify(error, null, 2)}`);
-		});
-	};
-
 	const postData = JSON.stringify({
 		email: email,
 		name: group,
@@ -89,9 +63,18 @@ export const addGroup = async (request: Request, response: Response) => {
 		logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
 	}
 
-	const req = https.request(options, callback);
-	req.write(postData);
-	req.end();
+	try {
+		const axiosResponse: AxiosResponse = await axios.post('https://admin.googleapis.com/admin/directory/v1/groups/', postData, {
+			headers: {
+				Authorization: `Bearer ${bearer}`,
+				'Content-Type': 'application/json',
+			},
+		});
+		response.send(axiosResponse.data);
+	} catch (error) {
+		logger.error(`error=${JSON.stringify(error, null, 2)}`);
+		response.status(400).send(error);
+	}
 };
 
 // Add member to group given in request header
@@ -99,32 +82,6 @@ export const addMember = async (request: Request, response: Response) => {
 	const { bearer } = request.headers;
 	const { email } = request.headers;
 	const { group } = request.headers;
-
-	var options = {
-		method: 'POST',
-		hostname: 'admin.googleapis.com',
-		path: `/admin/directory/v1/groups/${group}/members`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (res: any) => {
-		var data = '';
-
-		res.on('data', (chunk: any) => {
-			data += chunk;
-		});
-
-		res.on('end', () => {
-			response.send(data);
-		});
-
-		res.on('error', (error: any) => {
-			logger.error(`error=${JSON.stringify(error, null, 2)}`);
-		});
-	};
 
 	const postData = JSON.stringify({
 		email: email,
@@ -134,41 +91,37 @@ export const addMember = async (request: Request, response: Response) => {
 		logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
 	}
 
-	const req = https.request(options, callback);
-	req.write(postData);
-	req.end();
+	try {
+		const axiosResponse: AxiosResponse = await axios.post(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`, postData, {
+			headers: {
+				Authorization: `Bearer ${bearer}`,
+				'Content-Type': 'application/json',
+			},
+		});
+		response.send(axiosResponse.data);
+	} catch (error) {
+		logger.error(`error=${JSON.stringify(error, null, 2)}`);
+		response.status(400).send(error);
+	}
 };
 
 // get the member of the Domain Directory
 export const directory = async (request: Request, response: Response) => {
 	const { bearer } = request.headers;
 
-	var options = {
-		method: 'GET',
-		hostname: 'www.google.com',
-		path: `/m8/feeds/contacts/yongsa.net/full`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (result: any) => {
-		let str = '';
-
-		//another chunk of data has been received, so append it to `str`
-		result.on('data', (chunk: any) => {
-			str += chunk;
+	try {
+		const axiosResponse: AxiosResponse = await axios.get('https://www.google.com/m8/feeds/contacts/yongsa.net/full', {
+			headers: {
+				Authorization: `Bearer ${bearer}`,
+				'GData-Version': '3.0',
+			},
 		});
-
-		//the whole response has been received, so we just print it out here
-		result.on('end', () => {
-			const obj: any = xml2json(str, { compact: true, spaces: 2 });
-			response.send(obj);
-		});
-	};
-
-	https.request(options, callback).end();
+		const obj = xml2json(axiosResponse.data, { compact: true, spaces: 2 });
+		response.send(obj);
+	} catch (error) {
+		logger.error(`error=${JSON.stringify(error, null, 2)}`);
+		response.status(400).send(error);
+	}
 };
 
 // Get events from the Yongsa shared calendar
@@ -178,31 +131,23 @@ export const events = async (request: Request, response: Response) => {
 	const { start } = request.headers;
 	const { filter } = request.headers;
 
-	var options = {
-		method: 'GET',
-		hostname: 'www.googleapis.com',
-		path: `/calendar/v3/calendars/${calendar}/events?maxResults=2500&singleEvents=true&q=${filter?.toString().replace(' ', '%20')}&timeMin=${start}`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (result: any) => {
-		let str = '';
-
-		//another chunk of data has been received, so append it to `str`
-		result.on('data', (chunk: any) => {
-			str += chunk;
+	try {
+		const axiosResponse: AxiosResponse = await axios.get(`https://www.googleapis.com/calendar/v3/calendars/${calendar}/events`, {
+			params: {
+				maxResults: 2500,
+				singleEvents: true,
+				q: filter?.toString().replace(' ', '%20'),
+				timeMin: start,
+			},
+			headers: {
+				Authorization: `Bearer ${bearer}`,
+			},
 		});
-
-		//the whole response has been received, so we just print it out here
-		result.on('end', () => {
-			response.send(str);
-		});
-	};
-
-	https.request(options, callback).end();
+		response.send(axiosResponse.data);
+	} catch (error) {
+		logger.error(`error=${JSON.stringify(error, null, 2)}`);
+		response.status(400).send(error);
+	}
 };
 
 // Get a URL to initialize GAPI authorization routine
@@ -232,31 +177,17 @@ export const group = async (request: Request, response: Response) => {
 	const { bearer } = request.headers;
 	const { group } = request.headers;
 
-	var options = {
-		method: 'GET',
-		hostname: 'admin.googleapis.com',
-		path: `admin.googleapis.com/admin/directory/v1/groups/${group}`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (result: any) => {
-		let str = '';
-
-		//another chunk of data has been received, so append it to `str`
-		result.on('data', (chunk: any) => {
-			str += chunk;
+	try {
+		const axiosResponse: AxiosResponse = await axios.get(`https://admin.googleapis.com/admin/directory/v1/groups/${group}`, {
+			headers: {
+				Authorization: `Bearer ${bearer}`,
+			},
 		});
-
-		//the whole response has been received, so we just print it out here
-		result.on('end', () => {
-			response.send(str);
-		});
-	};
-
-	https.request(options, callback).end();
+		response.send(axiosResponse.data);
+	} catch (error) {
+		logger.error(`error=${JSON.stringify(error, null, 2)}`);
+		response.status(400).send(error);
+	}
 };
 
 // Get Google Group Members information
@@ -265,36 +196,31 @@ export const members = async (request: Request, response: Response) => {
 	const { group } = request.headers;
 	const { nextPage } = request.headers;
 
+	const params: any = {
+		maxResults: 2500,
+	};
+	if (nextPage) {
+		params.pageToken = nextPage;
+	}
+
 	if (process.env.FUNCTIONS_EMULATOR) {
 		logger.log(`bearer=${bearer}`);
 		logger.log(`group=${group}`);
 		logger.log(`nextPage=${nextPage}`);
 	}
 
-	var options = {
-		method: 'GET',
-		hostname: 'admin.googleapis.com',
-		path: `/admin/directory/v1/groups/${group}/members?maxResults=2500` + (nextPage ? `&pageToken=${nextPage}` : ''),
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (result: any) => {
-		let str = '';
-
-		//another chunk of data has been received, so append it to `str`
-		result.on('data', (chunk: any) => {
-			str += chunk;
+	try {
+		const axiosResponse: AxiosResponse = await axios.get(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`, {
+			params,
+			headers: {
+				Authorization: `Bearer ${bearer}`,
+			},
 		});
-
-		//the whole response has been received, so we just print it out here
-		result.on('end', () => {
-			response.send(str);
-		});
-	};
-
-	https.request(options, callback).end();
+		response.send(axiosResponse.data);
+	} catch (error) {
+		logger.error(`error=${JSON.stringify(error, null, 2)}`);
+		response.status(400).send(error);
+	}
 };
 
 // Handles to redirect url callback
@@ -356,34 +282,19 @@ export const removeMember = async (request: Request, response: Response) => {
 	const { email } = request.headers;
 	const { group } = request.headers;
 
-	var options = {
-		method: 'DELETE',
-		hostname: 'admin.googleapis.com',
-		path: `/admin/directory/v1/groups/${group}/members/${email}`,
-
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-		},
-	};
-
-	const callback = (res: any) => {
-		var data = '';
-
-		res.on('data', (chunk: any) => {
-			data += chunk;
+	try {
+		const axiosResponse: AxiosResponse = await axios.delete(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members/${email}`, {
+			headers: {
+				Authorization: `Bearer ${bearer}`,
+			},
 		});
-
-		res.on('end', () => {
-			response.send(data);
-		});
-
-		res.on('error', (error: any) => {
-			logger.log(`error=${JSON.stringify(error, null, 2)}`);
-		});
-	};
-
-	https.request(options, callback).end();
+		response.send(axiosResponse.data);
+	} catch (error) {
+		logger.error(`error=${JSON.stringify(error, null, 2)}`);
+		response.status(400).send(error);
+	}
 };
+
 export const createSharedContact = async (request: Request, response: Response) => {
 	const { bearer } = request.headers;
 	const { email, name } = request.body;
@@ -401,33 +312,20 @@ export const createSharedContact = async (request: Request, response: Response) 
                 address='${email}' />
         </atom:entry>`;
 
-	const options = {
-		method: 'POST',
-		hostname: 'www.google.com',
-		path: `/m8/feeds/contacts/yongsa.net/full`,
-		headers: {
-			Authorization: `Bearer ${bearer}`,
-			'GData-Version': 3.0,
-			'Content-Type': 'application/atom+xml',
-		},
-	};
-
-	const req = https.request(options, res => {
-		let data = '';
-		res.on('data', chunk => {
-			data += chunk;
+	try {
+		const axiosResponse: AxiosResponse = await axios.post('https://www.google.com/m8/feeds/contacts/yongsa.net/full', contactXML, {
+			headers: {
+				Authorization: `Bearer ${bearer}`,
+				'GData-Version': '3.0',
+				'Content-Type': 'application/atom+xml',
+			},
 		});
-		res.on('end', () => {
-			console.log('Contact created successfully:', data);
-		});
-	});
-
-	req.on('error', error => {
-		console.error('Error creating contact:', error);
-	});
-
-	req.write(contactXML);
-	req.end();
+		logger.log('Contact created successfully:', axiosResponse.data);
+		response.send(axiosResponse.data);
+	} catch (error) {
+		logger.error('Error creating contact:', error);
+		response.status(400).send(error);
+	}
 };
 
 // For future use. currently untested and not implemented
@@ -435,33 +333,17 @@ export const removeSharedContact = async (request: Request, response: Response) 
 	const { bearer } = request.headers;
 	const { id } = request.body;
 
-	const options = {
-		method: 'DELETE',
-		hostname: 'www.google.com',
-		path: `/m8/feeds/contacts/yongsa.net/base/${id}`,
-		headers: {
-			Authorization: `OAuth ${bearer}`,
-			'If-Match': '*',
-		},
-		maxRedirects: 20,
-	};
-
-	const req = https.request(options, function (res) {
-		const chunks: Buffer[] = [];
-
-		res.on('data', function (chunk) {
-			chunks.push(chunk);
+	try {
+		const axiosResponse: AxiosResponse = await axios.delete(`https://www.google.com/m8/feeds/contacts/yongsa.net/base/${id}`, {
+			headers: {
+				Authorization: `OAuth ${bearer}`,
+				'If-Match': '*',
+			},
 		});
-
-		res.on('end', function () {
-			const body = Buffer.concat(chunks);
-			console.log(body.toString());
-		});
-
-		res.on('error', function (error) {
-			console.error(error);
-		});
-	});
-
-	req.end();
+		logger.log(axiosResponse.data);
+		response.send(axiosResponse.data);
+	} catch (error) {
+		logger.error(error);
+		response.status(400).send(error);
+	}
 };

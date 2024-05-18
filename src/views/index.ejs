@@ -1,19 +1,14 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 
 <head>
-     <title>Node.js Sandbox Route List</title>
+     <title>
+          <%= title %>
+     </title>
 </head>
 
 <body>
-     <ul>
-          <% routes.forEach(function(route) { %>
-               <li>
-                    <%= route.method %>
-                         <%= route.path %>
-               </li>
-               <% }); %>
-     </ul>
+     <h1>Welcome to <%= title %>!</h1>
 </body>
 
 </html>

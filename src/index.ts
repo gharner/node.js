@@ -5,10 +5,13 @@ import { IRoutes } from './interfaces';
 import { cors } from './middleware/cors';
 import { routes } from './routes';
 import { onAddSandboxDocument } from './controller/sandbox';
+import path from 'path';
 
 routes.forEach((routerObj: IRoutes) => {
 	const app = Express();
 	app.use(cors);
+	app.set('views', path.join(__dirname, 'views'));
+	app.set('view engine', 'ejs');
 	app.use(routerObj.router);
 	exports[routerObj.name] = functions.https.onRequest(app);
 });
@@ -41,3 +44,18 @@ export const currentEnvironment = functions.https.onRequest((request, response) 
 });
 
 export { onAddSandboxDocument };
+
+/* const mainapp = Express();
+
+// Set the view engine to EJS
+mainapp.set('view engine', 'ejs');
+mainapp.set('views', path.join(__dirname, 'views'));
+
+// Define a route that renders an HTML page using EJS
+mainapp.get('/example', (req, res) => {
+	res.render('index', { title: 'Home Page' });
+});
+
+// Export the Express app as a Firebase Function
+exports.mainapp = functions.https.onRequest(mainapp);
+ */

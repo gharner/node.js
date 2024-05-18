@@ -6,6 +6,7 @@ import { qbToken } from '../interfaces';
 import { admin } from '../middleware/firebase';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
+import { sendErrorEmail, safeStringify } from '../utilities/common';
 
 const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
 
@@ -16,12 +17,20 @@ const oauthClient = new OAuthClient({
 	redirectUri: config.redirect_uri,
 });
 
-const handleError = (response: Response, error: unknown) => {
+const handleError = (response: Response, error: unknown, funcName: string) => {
 	if (error instanceof Error) {
-		logger.error('Error:', error.message);
+		const messageText = safeStringify(error, 2);
+
+		const emailMessage = {
+			to: 'gh@yongsa.net',
+			message: { subject: funcName, text: messageText },
+		};
+
+		sendErrorEmail(emailMessage);
+
 		response.status(500).send({ error: error.message });
 	} else {
-		logger.error('Unknown error:', error);
+		logger.error('Unknown error:', safeStringify(error, 2));
 		response.status(500).send({ error: 'Internal Server Error' });
 	}
 };
@@ -37,51 +46,68 @@ const isQbToken = (obj: any): obj is qbToken => {
 	);
 };
 
-export const auth_request = (response: Response) => {
+export const auth_request = (request: Request, response: Response) => {
+	const errorArray: any[] = [];
 	try {
 		const auth_url = oauthClient.authorizeUri({
 			scope: config.scope,
 		});
 
-		logger.info('auth_url:', auth_url);
+		errorArray.push({ auth_url: auth_url });
 
 		response.send(auth_url);
 	} catch (e) {
-		handleError(response, e);
+		logger.error(errorArray);
+		handleError(response, e, 'controller=>quickbooks=>auth_request');
 	}
 };
+
 export const auth_token = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
+
 	try {
-		logger.info('auth_token:', oauthClient);
+		errorArray.push({ auth_token: oauthClient });
 
 		const parseRedirect = request.url;
-		logger.info('parseRedirect:', parseRedirect);
+		errorArray.push({ parseRedirect });
 
 		const authResponse = await oauthClient.createToken(parseRedirect);
-		logger.info('authResponse:', authResponse);
+		errorArray.push({ authResponse });
 
 		const payload = authResponse.getJson();
-		logger.info('payload:', payload);
+		errorArray.push({ payload });
 
 		if (!isQbToken(payload)) {
 			throw new Error('Invalid token payload');
 		}
 
-		payload.server_time = new Date().valueOf();
+		payload.server_time = Date.now();
 		const t1 = new Date();
 		t1.setSeconds(t1.getSeconds() + payload.expires_in);
 		payload.expires_time = t1.valueOf();
+
 		const t2 = new Date();
 		t2.setSeconds(t2.getSeconds() + payload.x_refresh_token_expires_in);
 		payload.refresh_time = t2.valueOf();
 
 		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(payload, { merge: true });
 
-		const html_response =
-			'<!DOCTYPE html><html lang="en"><head><title>Quickbooks Token Response</title><script>window.close();</script></head><body><h4>New Token Issued</h4></body></html>';
-		response.send(html_response);
+		const htmlResponse = `
+            <!DOCTYPE html>
+            <html lang="en">
+                <head>
+                    <title>Quickbooks Token Response</title>
+                    <script>window.close();</script>
+                </head>
+                <body>
+                    <h4>New Token Issued</h4>
+                </body>
+            </html>
+        `;
+		response.send(htmlResponse);
 	} catch (e) {
-		handleError(response, e);
+		logger.error(errorArray);
+		handleError(response, e, 'controller=>quickbooks=>auth_token');
 	}
 };
 
@@ -110,7 +136,7 @@ export const get_updates = async (request: Request, response: Response) => {
 		const result: AxiosResponse = await axios(config);
 		response.send(result.data.QueryResponse);
 	} catch (e) {
-		handleError(response, e);
+		handleError(response, e, 'controller=>quickbooks=>get_updates');
 	}
 };
 
@@ -131,7 +157,7 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 		const result: AxiosResponse = await axios(config);
 		response.send(result.data.QueryResponse);
 	} catch (e) {
-		handleError(response, e);
+		handleError(response, e, 'controller=>quickbooks=>getCustomerByEmail');
 	}
 };
 
@@ -140,11 +166,6 @@ export const refresh_token = async (request: Request, response: Response) => {
 		const authResponse = await oauthClient.refreshUsingToken(request.headers.refresh_token as string);
 		response.send(authResponse.getJson());
 	} catch (e) {
-		if (e instanceof Error) {
-			console.error('The error message is:', e.message);
-		} else {
-			console.error('Unknown error:', e);
-		}
-		handleError(response, e);
+		handleError(response, e, 'controller=>quickbooks=>refresh_token');
 	}
 };

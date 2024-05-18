@@ -1,6 +1,8 @@
+import { logger } from 'firebase-functions';
 import { Schedule } from '../interfaces';
 import { admin } from '../middleware/firebase';
-import { logger } from 'firebase-functions';
+import { sendErrorEmail } from '../utilities/common';
+import { emailMessage } from '../interfaces/common';
 
 export const dailyJobs = async () => {
 	await getSchedules().catch(error => {
@@ -88,9 +90,9 @@ function getUniqueNotifications(notifications: any[]) {
 	});
 }
 
-async function sendNotification(collection: string, to: string | undefined, bcc: string, schedule: Schedule) {
+async function sendNotification(collection: string, to: string, bcc: string, schedule: Schedule) {
 	const startDate = dateLocalString(schedule.start.dateTime);
-	let message = {};
+	let message: emailMessage | { to: string; body: string };
 
 	if (collection === 'mas-email') {
 		message = {
@@ -132,12 +134,4 @@ function dateLocalString(d: any) {
 	}
 
 	return d.toLocaleString('en-US', { timeZone: 'America/New_York' });
-}
-
-async function sendErrorEmail(message: {}) {
-	try {
-		await admin.firestore().collection('mas-email').add(message);
-	} catch (error) {
-		logger.error('Failed to send error email: ', error);
-	}
 }
