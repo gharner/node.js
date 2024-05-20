@@ -6,7 +6,7 @@ import { qbToken } from '../interfaces';
 import { admin } from '../middleware/firebase';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
-import { handleError } from '../utilities/common';
+import { CustomError, handleError } from '../utilities/common';
 
 const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
 
@@ -29,18 +29,21 @@ const isQbToken = (obj: any): obj is qbToken => {
 };
 
 export const auth_request = (request: Request, response: Response) => {
-	const errorArray: any[] = [];
 	try {
 		const auth_url = oauthClient.authorizeUri({
 			scope: config.scope,
 		});
 
-		errorArray.push({ auth_url: auth_url });
-
 		response.send(auth_url);
 	} catch (e) {
-		logger.error(errorArray);
-		handleError(e, 'controller=>quickbooks=>auth_request', response);
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		logger.error('Error in auth_request:', additionalInfo);
+		const customError = new CustomError('Failed to get auth URL', 'Auth Error', additionalInfo);
+		handleError(customError, 'controller=>quickbooks=>auth_request', response);
 	}
 };
 
@@ -48,16 +51,16 @@ export const auth_token = async (request: Request, response: Response) => {
 	const errorArray: any[] = [];
 
 	try {
-		errorArray.push({ auth_token: oauthClient });
+		errorArray.push({ step: 'initializing', auth_token: oauthClient });
 
 		const parseRedirect = request.url;
-		errorArray.push({ parseRedirect });
+		errorArray.push({ step: 'parsing redirect', parseRedirect });
 
 		const authResponse = await oauthClient.createToken(parseRedirect);
-		errorArray.push({ authResponse });
+		errorArray.push({ step: 'creating token', authResponse });
 
 		const payload = authResponse.getJson();
-		errorArray.push({ payload });
+		errorArray.push({ step: 'getting payload', payload });
 
 		if (!isQbToken(payload)) {
 			throw new Error('Invalid token payload');
@@ -88,8 +91,15 @@ export const auth_token = async (request: Request, response: Response) => {
         `;
 		response.send(htmlResponse);
 	} catch (e) {
-		logger.error(errorArray);
-		handleError(e, 'controller=>quickbooks=>auth_token', response);
+		const additionalInfo = {
+			errorArray,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		logger.error('Error in auth_token:', additionalInfo);
+		const customError = new CustomError('Failed to get auth token', 'Auth Error', additionalInfo);
+		handleError(customError, 'controller=>quickbooks=>auth_token', response);
 	}
 };
 
@@ -118,7 +128,15 @@ export const get_updates = async (request: Request, response: Response) => {
 		const result: AxiosResponse = await axios(config);
 		response.send(result.data.QueryResponse);
 	} catch (e) {
-		handleError(e, 'controller=>quickbooks=>get_updates', response);
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		logger.error('Error in get_updates:', additionalInfo);
+
+		const customError = new CustomError('Failed to get_updates', 'Details', additionalInfo);
+		handleError(customError, 'controller=>quickbooks=>get_updates', response);
 	}
 };
 
@@ -139,7 +157,15 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 		const result: AxiosResponse = await axios(config);
 		response.send(result.data.QueryResponse);
 	} catch (e) {
-		handleError(e, 'controller=>quickbooks=>getCustomerByEmail', response);
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		logger.error('Error in getCustomerByEmail:', additionalInfo);
+
+		const customError = new CustomError('Failed to getCustomerByEmail', 'Details', additionalInfo);
+		handleError(customError, 'controller=>quickbooks=>getCustomerByEmail', response);
 	}
 };
 
@@ -148,6 +174,14 @@ export const refresh_token = async (request: Request, response: Response) => {
 		const authResponse = await oauthClient.refreshUsingToken(request.headers.refresh_token as string);
 		response.send(authResponse.getJson());
 	} catch (e) {
-		handleError(e, 'controller=>quickbooks=>refresh_token', response);
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		logger.error('Error in refresh_token:', additionalInfo);
+
+		const customError = new CustomError('Failed to refresh_token', 'Details', additionalInfo);
+		handleError(customError, 'controller=>quickbooks=>refresh_token', response);
 	}
 };

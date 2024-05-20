@@ -1,10 +1,18 @@
 import { Schedule } from '../interfaces';
 import { admin } from '../middleware/firebase';
-import { handleError } from '../utilities/common';
+import { CustomError, handleError } from '../utilities/common';
 import { EmailMessage } from '../interfaces/common';
 export const dailyJobs = async () => {
 	await getSchedules().catch(e => {
-		handleError(e, 'controller=>gizmo=>dailyJobs');
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed dailyJobs', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gizmo=>dailyJobs');
 	});
 };
 
@@ -26,7 +34,15 @@ async function getSchedules() {
 
 		processSchedules(data);
 	} catch (e) {
-		handleError(e, 'controller=>gizmo=>getSchedules');
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed getSchedules', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gizmo=>getSchedules');
 	}
 }
 
@@ -60,7 +76,15 @@ async function processSchedules(schedules: Schedule[]) {
 				await sendNotification('mas-twilio', notify.phone, '', schedule);
 			}
 		} catch (e) {
-			handleError(e, 'controller=>quickbooks=>refresh_token');
+			// Capture additional information
+			const additionalInfo = {
+				timestamp: new Date().toISOString(),
+				originalError: e instanceof Error ? e.message : 'Unknown error',
+			};
+
+			// Throw the CustomError with additional information
+			const customError = new CustomError('Failed processSchedules', 'Details', additionalInfo);
+			handleError(customError, 'controller=>gizmo=>processSchedules');
 		}
 	}
 }
@@ -97,7 +121,16 @@ async function sendNotification(collection: string, to: string, bcc: string, sch
 	try {
 		await admin.firestore().collection(collection).add(message);
 	} catch (e) {
-		handleError(e, 'controller=>quickbooks=>refresh_token');
+		handleError(e, 'controller=>gizmo=>sendNotification');
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed sendNotification', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gizmo=>sendNotification');
 	}
 }
 

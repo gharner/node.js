@@ -1,8 +1,10 @@
 import { Request, Response } from 'express';
-import { logger } from 'firebase-functions';
-import { admin } from '../middleware/firebase';
 import * as functions from 'firebase-functions';
-import { handleError } from '../utilities/common';
+import { admin } from '../middleware/firebase';
+import { CustomError, handleError, serializeError } from '../utilities/common';
+
+const logger = functions.logger;
+const firestore = functions.firestore;
 
 export const space_station = (request: Request, response: Response) => {
 	const axios = require('axios');
@@ -20,7 +22,15 @@ export const space_station = (request: Request, response: Response) => {
 			response.send(data);
 		})
 		.catch((e: any) => {
-			handleError(e, 'controller=>sandbox=>getFirecloudDocuments', response);
+			const additionalInfo = {
+				timestamp: new Date().toISOString(),
+				originalError: e instanceof Error ? e.message : 'Unknown error',
+			};
+
+			logger.error('Error in space_station:', additionalInfo);
+
+			const customError = new CustomError('Failed to space_station', 'Details', additionalInfo);
+			handleError(customError, 'controller=>sandbox=>space_station', response);
 		});
 };
 export const getFirecloudDocuments = async (request: Request, response: Response) => {
@@ -30,11 +40,19 @@ export const getFirecloudDocuments = async (request: Request, response: Response
 
 		response.status(200).send(documents);
 	} catch (e: any) {
-		handleError(e, 'controller=>sandbox=>getFirecloudDocuments', response);
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		logger.error('Error in getFirecloudDocuments:', additionalInfo);
+
+		const customError = new CustomError('Failed to getFirecloudDocuments', 'Details', additionalInfo);
+		handleError(customError, 'controller=>sandbox=>getFirecloudDocuments', response);
 	}
 };
 
-export const onAddSandboxDocument = functions.firestore.document('sandbox-documents/{docId}').onCreate(async (snap, context) => {
+export const onAddSandboxDocument = firestore.document('sandbox-documents/{docId}').onCreate(async (snap, context) => {
 	logger.debug(`Running add document course trigger for document ${context.params.docId}`);
 
 	const db = admin.firestore();
@@ -59,11 +77,10 @@ export const htmlExample = (request: Request, response: Response) => {
 
 export const testErrorHandler = (request: Request, response: Response) => {
 	try {
-		throw new Error('Test Error Handler');
+		throw new CustomError('Something went wrong', 'Some custom value', { additional: 'info' });
 	} catch (e) {
-		functions.logger.log('Caught error:', e);
-		functions.logger.log('Instance of Error:', e instanceof Error);
-		functions.logger.log('Error stringified:', JSON.stringify(e));
+		const serializedError = serializeError(e as Error);
+		logger.error(serializedError);
 		handleError(e, 'controller=>sandbox=>testErrorHandler', response);
 	}
 };

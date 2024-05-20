@@ -5,6 +5,7 @@ import { google } from 'googleapis';
 import { xml2json } from 'xml-js';
 import { GaxiosResponse } from 'gaxios';
 import { logger } from 'firebase-functions';
+import { CustomError, handleError } from '../utilities/common';
 
 // Using GAPI authorization URL get token information and store it in Firecloud
 export const accessToken = async (request: Request, response: Response) => {
@@ -44,8 +45,19 @@ export const accessToken = async (request: Request, response: Response) => {
 		await accountsCollection.doc(<string>account).set({ mas: { gapi: { token: credentials.res?.data } } }, { merge: true });
 
 		response.status(200).send(token);
-	} catch (error: any) {
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting accessToken:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get accessToken', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>accessToken', response);
 	}
 };
 
@@ -71,9 +83,21 @@ export const addGroup = async (request: Request, response: Response) => {
 			},
 		});
 		response.send(axiosResponse.data);
-	} catch (error) {
-		logger.error(`error=${JSON.stringify(error, null, 2)}`);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			group: group,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error addGroup:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed addGroup', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>addGroup', response);
 	}
 };
 
@@ -99,9 +123,21 @@ export const addMember = async (request: Request, response: Response) => {
 			},
 		});
 		response.send(axiosResponse.data);
-	} catch (error) {
-		logger.error(`error=${JSON.stringify(error, null, 2)}`);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			group: group,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error addMember:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed addMember', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>addMember', response);
 	}
 };
 
@@ -118,9 +154,20 @@ export const directory = async (request: Request, response: Response) => {
 		});
 		const obj = xml2json(axiosResponse.data, { compact: true, spaces: 2 });
 		response.send(obj);
-	} catch (error) {
-		logger.error(`error=${JSON.stringify(error, null, 2)}`);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting directory:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get directory', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>directory', response);
 	}
 };
 
@@ -144,9 +191,20 @@ export const events = async (request: Request, response: Response) => {
 			},
 		});
 		response.send(axiosResponse.data);
-	} catch (error) {
-		logger.error(`error=${JSON.stringify(error, null, 2)}`);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting events:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get events', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>events', response);
 	}
 };
 
@@ -184,9 +242,21 @@ export const group = async (request: Request, response: Response) => {
 			},
 		});
 		response.send(axiosResponse.data);
-	} catch (error) {
-		logger.error(`error=${JSON.stringify(error, null, 2)}`);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			group: group,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting group:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get group', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>group', response);
 	}
 };
 
@@ -217,9 +287,22 @@ export const members = async (request: Request, response: Response) => {
 			},
 		});
 		response.send(axiosResponse.data);
-	} catch (error) {
-		logger.error(`error=${JSON.stringify(error, null, 2)}`);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			group: group,
+			nextPage: nextPage,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting members:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get members', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>members', response);
 	}
 };
 
@@ -271,8 +354,19 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 		const html_response =
 			'<!DOCTYPE html><html lang="en"><head><title>Google Token Response</title><script>window.close();</script></head><body><h4>New Token Issued</h4></body></html>';
 		response.send(html_response);
-	} catch (error) {
-		response.status(400).send(email);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error oAuthCallback:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed oAuthCallback', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>oAuthCallback', response);
 	}
 };
 
@@ -289,9 +383,22 @@ export const removeMember = async (request: Request, response: Response) => {
 			},
 		});
 		response.send(axiosResponse.data);
-	} catch (error) {
-		logger.error(`error=${JSON.stringify(error, null, 2)}`);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			email: email,
+			group: group,
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error removing member:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to remove member', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>removeMember', response);
 	}
 };
 
@@ -322,9 +429,22 @@ export const createSharedContact = async (request: Request, response: Response) 
 		});
 		logger.log('Contact created successfully:', axiosResponse.data);
 		response.send(axiosResponse.data);
-	} catch (error) {
-		logger.error('Error creating contact:', error);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			email: email,
+			name: name,
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error creating shared contact:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to create shared contact', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>createSharedContact', response);
 	}
 };
 
@@ -342,8 +462,20 @@ export const removeSharedContact = async (request: Request, response: Response) 
 		});
 		logger.log(axiosResponse.data);
 		response.send(axiosResponse.data);
-	} catch (error) {
-		logger.error(error);
-		response.status(400).send(error);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			requestId: id,
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error removing shared contact:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to remove shared contact', 'Details', additionalInfo);
+		handleError(customError, 'controller=>gapi=>removeSharedContact', response);
 	}
 };
