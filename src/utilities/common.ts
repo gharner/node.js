@@ -44,7 +44,7 @@ export async function handleError(error: unknown, funcName: string, response?: R
 export async function sendErrorEmail(emailMessage: EmailMessage) {
 	try {
 		const docRef = await admin.firestore().collection('mas-email').add({ to: emailMessage.to, message: emailMessage.message });
-		logger.info('Document written with ID: ', docRef.id);
+		logger.info('Document written to mas-email with ID: ', docRef.id);
 	} catch (error) {
 		logger.error('Failed to send error email: ', error);
 	}

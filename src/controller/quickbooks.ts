@@ -14,7 +14,7 @@ const oauthClient = new OAuthClient({
 	clientId: config.client_id,
 	clientSecret: config.client_secret,
 	environment: config.state === 'development' ? 'sandbox' : 'production',
-	redirectUri: config.redirect_uri,
+	redirectUri: process.env.FUNCTIONS_EMULATOR ? `http://localhost:5001/${process.env.GCLOUD_PROJECT}/us-central1/qb/auth_token` : config.redirect_uri,
 });
 
 const isQbToken = (obj: any): obj is qbToken => {
@@ -23,8 +23,7 @@ const isQbToken = (obj: any): obj is qbToken => {
 		typeof obj.access_token === 'string' &&
 		typeof obj.expires_in === 'number' &&
 		typeof obj.refresh_token === 'string' &&
-		typeof obj.x_refresh_token_expires_in === 'number' &&
-		typeof obj.lastCustomerUpdate === 'string'
+		typeof obj.x_refresh_token_expires_in === 'number'
 	);
 };
 
@@ -56,26 +55,27 @@ export const auth_token = async (request: Request, response: Response) => {
 		const parseRedirect = request.url;
 		errorArray.push({ step: 'parsing redirect', parseRedirect });
 
-		const authResponse = await oauthClient.createToken(parseRedirect);
+		const authResponse: any = await oauthClient.createToken(parseRedirect);
 		errorArray.push({ step: 'creating token', authResponse });
 
-		const payload = authResponse.getJson();
-		errorArray.push({ step: 'getting payload', payload });
+		/* 		const payload: any = await authResponse.getJson();
+		errorArray.push({ step: 'getting payload', payload }); */
 
-		if (!isQbToken(payload)) {
+		if (!isQbToken(authResponse.body)) {
 			throw new Error('Invalid token payload');
 		}
 
-		payload.server_time = Date.now();
+		authResponse.body.server_time = Date.now();
 		const t1 = new Date();
-		t1.setSeconds(t1.getSeconds() + payload.expires_in);
-		payload.expires_time = t1.valueOf();
+
+		t1.setSeconds(t1.getSeconds() + authResponse.body.expires_in);
+		authResponse.body.expires_time = t1.valueOf();
 
 		const t2 = new Date();
-		t2.setSeconds(t2.getSeconds() + payload.x_refresh_token_expires_in);
-		payload.refresh_time = t2.valueOf();
+		t2.setSeconds(t2.getSeconds() + authResponse.body.x_refresh_token_expires_in);
+		authResponse.body.refresh_time = t2.valueOf();
 
-		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(payload, { merge: true });
+		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
 
 		const htmlResponse = `
             <!DOCTYPE html>
