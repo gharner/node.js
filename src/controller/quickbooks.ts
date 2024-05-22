@@ -28,16 +28,22 @@ const isQbToken = (obj: any): obj is qbToken => {
 };
 
 export const auth_request = (request: Request, response: Response) => {
+	const errorArray: any[] = [];
 	try {
 		const auth_url = oauthClient.authorizeUri({
 			scope: config.scope,
 		});
 
+		errorArray.push({ auth_url: auth_url });
+
 		response.send(auth_url);
 	} catch (e) {
 		const additionalInfo = {
-			timestamp: new Date().toISOString(),
-			originalError: e instanceof Error ? e.message : 'Unknown error',
+			errorDetails: errorArray, // Include any collected error details
+			timestamp: new Date().toISOString(), // Add a timestamp
+			originalError: e instanceof Error ? e.message : 'Unknown error', // Original error message
+			stack: e instanceof Error ? e.stack : 'No stack trace available', // Include the stack trace if available
+			functionContext: 'controller=>quickbooks=>auth_request', // Contextual information about where the error occurred
 		};
 
 		logger.error('Error in auth_request:', additionalInfo);
@@ -57,9 +63,6 @@ export const auth_token = async (request: Request, response: Response) => {
 
 		const authResponse: any = await oauthClient.createToken(parseRedirect);
 		errorArray.push({ step: 'creating token', authResponse });
-
-		/* 		const payload: any = await authResponse.getJson();
-		errorArray.push({ step: 'getting payload', payload }); */
 
 		if (!isQbToken(authResponse.body)) {
 			throw new Error('Invalid token payload');
@@ -92,7 +95,7 @@ export const auth_token = async (request: Request, response: Response) => {
 		response.send(htmlResponse);
 	} catch (e) {
 		const additionalInfo = {
-			errorArray,
+			...errorArray,
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
@@ -170,11 +173,24 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 };
 
 export const refresh_token = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
+
 	try {
-		const authResponse = await oauthClient.refreshUsingToken(request.headers.refresh_token as string);
-		response.send(authResponse.getJson());
+		if (!request.headers.refresh_token) throw new Error('The Refresh token is missing');
+		logger.info(request.headers.token);
+
+		errorArray.push({ refresh_token: request.headers.refresh_token });
+
+		if (!(oauthClient as any).token.refresh_token) (oauthClient as any).token.refresh_token = request.headers.refresh_token;
+		errorArray.push({ token: oauthClient.token });
+
+		const authResponse = await oauthClient.refresh();
+
+		errorArray.push({ authResponse: authResponse });
+		response.send(authResponse);
 	} catch (e) {
 		const additionalInfo = {
+			errorArray,
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};

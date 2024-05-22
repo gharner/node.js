@@ -23,7 +23,7 @@ export async function handleError(error: unknown, funcName: string, response?: R
 			await sendErrorEmail(emailMessage);
 
 			if (response) {
-				response.status(500).send({ error: error.message });
+				response.status(500).send({ error: serializedError });
 			}
 		} else {
 			const unknownError = safeStringify(error, 2).replace(/\n/g, '<br>');
