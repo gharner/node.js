@@ -48,7 +48,7 @@ export const auth_request = (request: Request, response: Response) => {
 
 		logger.error('Error in auth_request:', additionalInfo);
 		const customError = new CustomError('Failed to get auth URL', 'Auth Error', additionalInfo);
-		handleError(customError, 'controller=>quickbooks=>auth_request', response);
+		handleError(customError, response);
 	}
 };
 
@@ -96,13 +96,13 @@ export const auth_token = async (request: Request, response: Response) => {
 	} catch (e) {
 		const additionalInfo = {
 			...errorArray,
-			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
+			timestamp: new Date().toISOString(),
 		};
 
 		logger.error('Error in auth_token:', additionalInfo);
 		const customError = new CustomError('Failed to get auth token', 'Auth Error', additionalInfo);
-		handleError(customError, 'controller=>quickbooks=>auth_token', response);
+		handleError(customError, response);
 	}
 };
 
@@ -138,8 +138,8 @@ export const get_updates = async (request: Request, response: Response) => {
 
 		logger.error('Error in get_updates:', additionalInfo);
 
-		const customError = new CustomError('Failed to get_updates', 'Details', additionalInfo);
-		handleError(customError, 'controller=>quickbooks=>get_updates', response);
+		const customError = new CustomError('Failed to get_updates', 'controller=>quickbooks=>get_updates', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
@@ -167,8 +167,8 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 
 		logger.error('Error in getCustomerByEmail:', additionalInfo);
 
-		const customError = new CustomError('Failed to getCustomerByEmail', 'Details', additionalInfo);
-		handleError(customError, 'controller=>quickbooks=>getCustomerByEmail', response);
+		const customError = new CustomError('Failed to getCustomerByEmail', 'controller=>quickbooks=>getCustomerByEmail', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
@@ -195,9 +195,7 @@ export const refresh_token = async (request: Request, response: Response) => {
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
 
-		logger.error('Error in refresh_token:', additionalInfo);
-
-		const customError = new CustomError('Failed to refresh_token', 'Details', additionalInfo);
-		handleError(customError, 'controller=>quickbooks=>refresh_token', response);
+		const customError = new CustomError('Failed to refresh_token', 'controller=>quickbooks=>refresh_token', additionalInfo);
+		handleError(customError, response);
 	}
 };

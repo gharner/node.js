@@ -11,8 +11,8 @@ export const dailyJobs = async () => {
 		};
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed dailyJobs', 'Details', additionalInfo);
-		handleError(customError, 'controller=>gizmo=>dailyJobs');
+		const customError = new CustomError('Failed dailyJobs', 'controller=>gizmo=>dailyJobs', additionalInfo);
+		handleError(customError);
 	});
 };
 
@@ -41,8 +41,8 @@ async function getSchedules() {
 		};
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed getSchedules', 'Details', additionalInfo);
-		handleError(customError, 'controller=>gizmo=>getSchedules');
+		const customError = new CustomError('Failed getSchedules', 'controller=>gizmo=>getSchedules', additionalInfo);
+		handleError(customError);
 	}
 }
 
@@ -83,8 +83,8 @@ async function processSchedules(schedules: Schedule[]) {
 			};
 
 			// Throw the CustomError with additional information
-			const customError = new CustomError('Failed processSchedules', 'Details', additionalInfo);
-			handleError(customError, 'controller=>gizmo=>processSchedules');
+			const customError = new CustomError('Failed processSchedules', 'controller=>gizmo=>processSchedules', additionalInfo);
+			handleError(customError);
 		}
 	}
 }
@@ -121,16 +121,13 @@ async function sendNotification(collection: string, to: string, bcc: string, sch
 	try {
 		await admin.firestore().collection(collection).add(message);
 	} catch (e) {
-		handleError(e, 'controller=>gizmo=>sendNotification');
-		// Capture additional information
 		const additionalInfo = {
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
 
-		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed sendNotification', 'Details', additionalInfo);
-		handleError(customError, 'controller=>gizmo=>sendNotification');
+		const customError = new CustomError('Failed sendNotification', 'controller=>gizmo=>sendNotification', additionalInfo);
+		handleError(customError);
 	}
 }
 

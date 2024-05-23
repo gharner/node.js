@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import * as functions from 'firebase-functions';
 import { admin } from '../middleware/firebase';
-import { CustomError, handleError, serializeError } from '../utilities/common';
+import { CustomError, handleError } from '../utilities/common';
 
 const logger = functions.logger;
 const firestore = functions.firestore;
@@ -29,8 +29,8 @@ export const space_station = (request: Request, response: Response) => {
 
 			logger.error('Error in space_station:', additionalInfo);
 
-			const customError = new CustomError('Failed to space_station', 'Details', additionalInfo);
-			handleError(customError, 'controller=>sandbox=>space_station', response);
+			const customError = new CustomError('Failed to space_station', 'controller=>sandbox=>space_station', additionalInfo);
+			handleError(customError, response);
 		});
 };
 export const getFirecloudDocuments = async (request: Request, response: Response) => {
@@ -47,8 +47,8 @@ export const getFirecloudDocuments = async (request: Request, response: Response
 
 		logger.error('Error in getFirecloudDocuments:', additionalInfo);
 
-		const customError = new CustomError('Failed to getFirecloudDocuments', 'Details', additionalInfo);
-		handleError(customError, 'controller=>sandbox=>getFirecloudDocuments', response);
+		const customError = new CustomError('Failed to getFirecloudDocuments', 'controller=>sandbox=>getFirecloudDocuments', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
@@ -79,8 +79,11 @@ export const testErrorHandler = (request: Request, response: Response) => {
 	try {
 		throw new CustomError('Something went wrong', 'Some custom value', { additional: 'info' });
 	} catch (e) {
-		const serializedError = serializeError(e as Error);
-		logger.error(serializedError);
-		handleError(e, 'controller=>sandbox=>testErrorHandler', response);
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+		const customError = new CustomError('Failed sendNotification', 'controller=>sandbox=>testErrorHandler', additionalInfo);
+		handleError(customError, response);
 	}
 };

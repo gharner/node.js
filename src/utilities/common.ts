@@ -6,7 +6,7 @@ import { EmailMessage } from '../interfaces/common';
 import { Response } from 'express';
 
 const logger = functions.logger;
-export async function handleError(error: unknown, funcName: string, response?: Response): Promise<void> {
+export async function handleError2(error: unknown, funcName: string, response?: Response): Promise<void> {
 	try {
 		if (error instanceof Error) {
 			const serializedError = serializeError(error);
@@ -41,6 +41,32 @@ export async function handleError(error: unknown, funcName: string, response?: R
 	}
 }
 
+export async function handleError(error: Error, response?: Response) {
+	if (error instanceof CustomError) {
+		if (error.additionalInfo) {
+			try {
+				const parsedAdditionalInfo = JSON.parse(error.additionalInfo);
+				logger.log({ Additional_Info: parsedAdditionalInfo });
+			} catch (e) {
+				logger.log({ Additional_Info: error.additionalInfo });
+			}
+		}
+
+		if (error.customProperty) {
+			logger.info(error.customProperty);
+		} else {
+			logger.info('no custom property');
+		}
+	} else {
+		// Handle generic error
+		console.error(`Generic Error: ${error.message}`);
+	}
+
+	if (response) {
+		response.status(500).send({ error });
+	}
+}
+
 export async function sendErrorEmail(emailMessage: EmailMessage) {
 	try {
 		const docRef = await admin.firestore().collection('mas-email').add({ to: emailMessage.to, message: emailMessage.message });
@@ -71,7 +97,7 @@ export function safeStringify(obj: any, space: number): string {
 
 export function serializeError(error: Error): object {
 	const serialized: any = {
-		message: error.message,
+		message: error,
 		name: error.name,
 		stack: error.stack ? error.stack.replace(/\n/g, '<br>') : '',
 	};
@@ -97,3 +123,30 @@ export class CustomError extends Error {
 		Error.captureStackTrace(this, this.constructor);
 	}
 }
+
+/*
+function extractAndParseJson(input: string) {
+	const regex = /{[\s\S]*}/;
+	const match = input.match(regex);
+
+	if (match) {
+		try {
+			const jsonObject = JSON.parse(match[0]);
+			return jsonObject;
+		} catch (e) {
+			console.error('Error parsing JSON:', e);
+		}
+	} else {
+		console.log('No JSON-like pattern found in the input string.');
+	}
+
+	return null;
+}
+
+const parsedJson = extractAndParseJson(inputString);
+if (parsedJson) {
+	console.log('Parsed JSON object:', parsedJson);
+} else {
+	console.log('Failed to parse JSON.');
+}
+ */
