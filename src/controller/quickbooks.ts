@@ -6,7 +6,7 @@ import { qbToken } from '../interfaces';
 import { admin } from '../middleware/firebase';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
-import { CustomError, handleError } from '../utilities/common';
+import { CustomError, handleError, safeStringify } from '../utilities/common';
 
 const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
 
@@ -56,7 +56,7 @@ export const auth_token = async (request: Request, response: Response) => {
 	const errorArray: any[] = [];
 
 	try {
-		errorArray.push({ step: 'initializing', auth_token: oauthClient });
+		errorArray.push({ step: 'initializing', oauthClient: oauthClient });
 
 		const parseRedirect = request.url;
 		errorArray.push({ step: 'parsing redirect', parseRedirect });
@@ -176,18 +176,18 @@ export const refresh_token = async (request: Request, response: Response) => {
 	const errorArray: any[] = [];
 
 	try {
-		if (!request.headers.refresh_token) throw new Error('The Refresh token is missing');
-		logger.info(request.headers.token);
+		const refreshToken = <string>request.headers['refresh_token'];
+		if (!refreshToken) {
+			throw new CustomError('Missing refresh_token header', 'controller=>quickbooks=>refresh_token', { errorArray });
+		}
 
-		errorArray.push({ refresh_token: request.headers.refresh_token });
+		const authResponse = await oauthClient.refreshUsingToken(refreshToken);
+		const safeResponse = safeStringify(authResponse);
+		const safeResponseJSON = JSON.parse(safeResponse);
+		logger.log(safeResponseJSON);
+		errorArray.push(safeResponseJSON);
 
-		if (!(oauthClient as any).token.refresh_token) (oauthClient as any).token.refresh_token = request.headers.refresh_token;
-		errorArray.push({ token: oauthClient.token });
-
-		const authResponse = await oauthClient.refresh();
-
-		errorArray.push({ authResponse: authResponse });
-		response.send(authResponse);
+		response.send('success');
 	} catch (e) {
 		const additionalInfo = {
 			errorArray,
@@ -195,7 +195,7 @@ export const refresh_token = async (request: Request, response: Response) => {
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
 
-		const customError = new CustomError('Failed to refresh_token', 'controller=>quickbooks=>refresh_token', additionalInfo);
+		const customError = new CustomError('Failed to refresh token', 'controller=>quickbooks=>refresh_token', additionalInfo);
 		handleError(customError, response);
 	}
 };

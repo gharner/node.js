@@ -1,57 +1,48 @@
-// functions/src/utilites/common.ts
-
 import { admin } from '../middleware/firebase';
 import * as functions from 'firebase-functions';
 import { EmailMessage } from '../interfaces/common';
 import { Response } from 'express';
 
 const logger = functions.logger;
-export async function handleError2(error: unknown, funcName: string, response?: Response): Promise<void> {
-	try {
-		if (error instanceof Error) {
-			const serializedError = serializeError(error);
-			const messageText = safeStringify(serializedError, 2).replace(/\n/g, '<br>');
-
-			const emailMessage = {
-				to: 'gh@yongsa.net',
-				message: {
-					subject: funcName,
-					html: `<p>${messageText}</p>`,
-				},
-			};
-
-			await sendErrorEmail(emailMessage);
-
-			if (response) {
-				response.status(500).send({ error: serializedError });
-			}
-		} else {
-			const unknownError = safeStringify(error, 2).replace(/\n/g, '<br>');
-			logger.error(`Unknown error in function ${funcName}:`, unknownError);
-
-			if (response) {
-				response.status(500).send({ error: 'Internal Server Error' });
-			}
-		}
-	} catch (sendError) {
-		logger.error(`Failed to handle error in function ${funcName}:`, sendError);
-		if (response) {
-			response.status(500).send({ error: 'Internal Server Error' });
-		}
-	}
-}
 
 export async function handleError(error: Error, response?: Response) {
-	if (error instanceof CustomError) {
-		if (error.additionalInfo) {
+	const serializedError = serializeError(error);
+
+	let additionalInfoText = '';
+	if (error instanceof CustomError && error.additionalInfo) {
+		if (typeof error.additionalInfo === 'string') {
+			additionalInfoText = `<p><strong>Additional Info:</strong><br>${error.additionalInfo.replace(/\n/g, '<br>')}</p>`;
+		} else {
 			try {
-				const parsedAdditionalInfo = JSON.parse(error.additionalInfo);
-				logger.log({ Additional_Info: parsedAdditionalInfo });
+				const parsedAdditionalInfo = safeStringify(error.additionalInfo, 2);
+				additionalInfoText = `<p><strong>Additional Info:</strong><br>${parsedAdditionalInfo.replace(/\n/g, '<br>')}</p>`;
+				logger.log({ Additional_Info: JSON.parse(parsedAdditionalInfo) });
 			} catch (e) {
+				additionalInfoText = `<p><strong>Additional Info:</strong><br>${safeStringify(error.additionalInfo, 2).replace(/\n/g, '<br>')}</p>`;
 				logger.log({ Additional_Info: error.additionalInfo });
 			}
 		}
+	}
 
+	const messageText = `
+        <p><strong>Error Name:</strong> ${error.name}</p>
+        <p><strong>Error Message:</strong> ${error.message}</p>
+        <p><strong>Error Stack:</strong><br>${error.stack?.replace(/\n/g, '<br>')}</p>
+        <p><strong>Serialized Error:</strong><br>${safeStringify(serializedError, 2).replace(/\n/g, '<br>')}</p>
+        ${additionalInfoText}
+    `;
+
+	const emailMessage = {
+		to: 'gh@yongsa.net',
+		message: {
+			subject: error instanceof CustomError && error.customProperty ? error.customProperty : 'Firebase Functions Error',
+			html: messageText,
+		},
+	};
+
+	await sendErrorEmail(emailMessage);
+
+	if (error instanceof CustomError) {
 		if (error.customProperty) {
 			logger.info(error.customProperty);
 		} else {
@@ -60,13 +51,13 @@ export async function handleError(error: Error, response?: Response) {
 	} else {
 		// Handle generic error
 		console.error(`Generic Error: ${error.message}`);
+		logger.error(serializedError);
 	}
 
 	if (response) {
-		response.status(500).send({ error });
+		response.status(500).send({ error: serializedError });
 	}
 }
-
 export async function sendErrorEmail(emailMessage: EmailMessage) {
 	try {
 		const docRef = await admin.firestore().collection('mas-email').add({ to: emailMessage.to, message: emailMessage.message });
@@ -76,7 +67,7 @@ export async function sendErrorEmail(emailMessage: EmailMessage) {
 	}
 }
 
-export function safeStringify(obj: any, space: number): string {
+export function safeStringify(obj: any, space: number = 2): string {
 	const cache = new Set();
 	return JSON.stringify(
 		obj,
@@ -97,7 +88,7 @@ export function safeStringify(obj: any, space: number): string {
 
 export function serializeError(error: Error): object {
 	const serialized: any = {
-		message: error,
+		message: error.message,
 		name: error.name,
 		stack: error.stack ? error.stack.replace(/\n/g, '<br>') : '',
 	};
@@ -110,7 +101,7 @@ export function serializeError(error: Error): object {
 	// Handle known custom properties if the error is a CustomError
 	if (error instanceof CustomError) {
 		serialized.customProperty = error.customProperty;
-		serialized.additionalInfo = error.additionalInfo;
+		serialized.additionalInfo = safeStringify(error.additionalInfo);
 	}
 
 	return serialized;
@@ -123,30 +114,3 @@ export class CustomError extends Error {
 		Error.captureStackTrace(this, this.constructor);
 	}
 }
-
-/*
-function extractAndParseJson(input: string) {
-	const regex = /{[\s\S]*}/;
-	const match = input.match(regex);
-
-	if (match) {
-		try {
-			const jsonObject = JSON.parse(match[0]);
-			return jsonObject;
-		} catch (e) {
-			console.error('Error parsing JSON:', e);
-		}
-	} else {
-		console.log('No JSON-like pattern found in the input string.');
-	}
-
-	return null;
-}
-
-const parsedJson = extractAndParseJson(inputString);
-if (parsedJson) {
-	console.log('Parsed JSON object:', parsedJson);
-} else {
-	console.log('Failed to parse JSON.');
-}
- */
