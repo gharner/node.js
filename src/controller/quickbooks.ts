@@ -165,16 +165,17 @@ export const get_updates = async (request: Request, response: Response) => {
 			url: `https://${request.headers.endpoint}/v3/company/${request.headers.company}/query?query=${query}`,
 			headers: {
 				Accept: 'application/json',
-				'Content-Type': 'application/text',
+				'Content-Type': 'application/json',
 				Authorization: `Bearer ${request.headers.token}`,
 			},
 		};
 		errorArray.push(config);
 
 		const result: AxiosResponse = await axios(config);
-		errorArray.push(result.data.QueryResponse);
+		errorArray.push(result.data.QueryResponse.Customer);
+		logger.log(result.data.QueryResponse.Customer);
 
-		response.send(result.data.QueryResponse);
+		response.send(result.data.QueryResponse.Customer);
 	} catch (e) {
 		const additionalInfo = {
 			errorArray,
