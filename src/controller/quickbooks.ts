@@ -10,6 +10,11 @@ import { CustomError, handleError, safeStringify } from '../utilities/common';
 
 const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
 
+/*******************************************************************************************
+ *
+ *  Functions require for authentication
+ *
+ *******************************************************************************************/
 const oauthClient = new OAuthClient({
 	clientId: config.client_id,
 	clientSecret: config.client_secret,
@@ -106,72 +111,6 @@ export const auth_token = async (request: Request, response: Response) => {
 	}
 };
 
-export const get_updates = async (request: Request, response: Response) => {
-	try {
-		const doc = await admin.firestore().doc('/mas-parameters/quickbooksAPI').get();
-		const data = doc.data() as qbToken;
-
-		if (!data || !data.expires_time) {
-			response.status(400).send({ error: 'Invalid or expired token' });
-		}
-
-		const lastUpdated = new Date(data.lastCustomerUpdate).toISOString().substring(0, 10);
-		const query = `Select * from Customer where Metadata.LastUpdatedTime > '${lastUpdated}'`;
-
-		const config = {
-			method: 'get',
-			url: `https://${request.headers.endpoint}/v3/company/${request.headers.company}/query?query=${query}`,
-			headers: {
-				Accept: 'application/json',
-				'Content-Type': 'application/text',
-				Authorization: `Bearer ${request.headers.token}`,
-			},
-		};
-
-		const result: AxiosResponse = await axios(config);
-		response.send(result.data.QueryResponse);
-	} catch (e) {
-		const additionalInfo = {
-			timestamp: new Date().toISOString(),
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-		};
-
-		logger.error('Error in get_updates:', additionalInfo);
-
-		const customError = new CustomError('Failed to get_updates', 'controller=>quickbooks=>get_updates', additionalInfo);
-		handleError(customError, response);
-	}
-};
-
-export const getCustomerByEmail = async (request: Request, response: Response) => {
-	try {
-		const query = `Select * from Customer where PrimaryEmailAddr = '${request.headers.email}'`;
-
-		const config = {
-			method: 'get',
-			url: `https://${request.headers.endpoint}/v3/company/${request.headers.company}/query?query=${query}`,
-			headers: {
-				Accept: 'application/json',
-				'Content-Type': 'application/text',
-				Authorization: `Bearer ${request.headers.token}`,
-			},
-		};
-
-		const result: AxiosResponse = await axios(config);
-		response.send(result.data.QueryResponse);
-	} catch (e) {
-		const additionalInfo = {
-			timestamp: new Date().toISOString(),
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-		};
-
-		logger.error('Error in getCustomerByEmail:', additionalInfo);
-
-		const customError = new CustomError('Failed to getCustomerByEmail', 'controller=>quickbooks=>getCustomerByEmail', additionalInfo);
-		handleError(customError, response);
-	}
-};
-
 export const refresh_token = async (request: Request, response: Response) => {
 	const errorArray: any[] = [];
 
@@ -184,10 +123,10 @@ export const refresh_token = async (request: Request, response: Response) => {
 		const authResponse = await oauthClient.refreshUsingToken(refreshToken);
 		const safeResponse = safeStringify(authResponse);
 		const safeResponseJSON = JSON.parse(safeResponse);
-		logger.log(safeResponseJSON);
+
 		errorArray.push(safeResponseJSON);
 
-		response.send('success');
+		response.send(safeResponseJSON);
 	} catch (e) {
 		const additionalInfo = {
 			errorArray,
@@ -196,6 +135,87 @@ export const refresh_token = async (request: Request, response: Response) => {
 		};
 
 		const customError = new CustomError('Failed to refresh token', 'controller=>quickbooks=>refresh_token', additionalInfo);
+		handleError(customError, response);
+	}
+};
+
+/*******************************************************************************************
+ *
+ *  Functions that fetch and update Quickbook data
+ *
+ *******************************************************************************************/
+export const get_updates = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
+	try {
+		const doc = await admin.firestore().doc('/mas-parameters/quickbooksAPI').get();
+		const data = doc.data() as qbToken;
+		errorArray.push(data);
+
+		if (!data || !data.expires_time) {
+			response.status(400).send({ error: 'Invalid or expired token' });
+		}
+
+		const lastUpdated = new Date(data.lastCustomerUpdate).toISOString().substring(0, 10);
+		errorArray.push(lastUpdated);
+
+		const query = `Select * from Customer where Metadata.LastUpdatedTime > '${lastUpdated}'`;
+
+		const config = {
+			method: 'get',
+			url: `https://${request.headers.endpoint}/v3/company/${request.headers.company}/query?query=${query}`,
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/text',
+				Authorization: `Bearer ${request.headers.token}`,
+			},
+		};
+		errorArray.push(config);
+
+		const result: AxiosResponse = await axios(config);
+		errorArray.push(result.data.QueryResponse);
+
+		response.send(result.data.QueryResponse);
+	} catch (e) {
+		const additionalInfo = {
+			errorArray,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		const customError = new CustomError('Failed to get_updates', 'controller=>quickbooks=>get_updates', additionalInfo);
+		handleError(customError, response);
+	}
+};
+
+export const getCustomerByEmail = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
+	try {
+		const query = `Select * from Customer where PrimaryEmailAddr = '${request.headers.email}'`;
+		errorArray.push(query);
+
+		const config = {
+			method: 'get',
+			url: `https://${request.headers.endpoint}/v3/company/${request.headers.company}/query?query=${query}`,
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/text',
+				Authorization: `Bearer ${request.headers.token}`,
+			},
+		};
+		errorArray.push(config);
+
+		const result: AxiosResponse = await axios(config);
+		errorArray.push(result.data.QueryResponse);
+
+		response.send(result.data.QueryResponse);
+	} catch (e) {
+		const additionalInfo = {
+			errorArray,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		const customError = new CustomError('Failed to getCustomerByEmail', 'controller=>quickbooks=>getCustomerByEmail', additionalInfo);
 		handleError(customError, response);
 	}
 };

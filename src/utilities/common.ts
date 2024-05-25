@@ -50,7 +50,7 @@ export async function handleError(error: Error, response?: Response) {
 		}
 	} else {
 		// Handle generic error
-		console.error(`Generic Error: ${error.message}`);
+		logger.error(`Generic Error: ${error.message}`);
 		logger.error(serializedError);
 	}
 
