@@ -101,7 +101,6 @@ export function serializeError(error: Error): object {
 	// Handle known custom properties if the error is a CustomError
 	if (error instanceof CustomError) {
 		serialized.customProperty = error.customProperty;
-		serialized.additionalInfo = safeStringify(error.additionalInfo);
 	}
 
 	return serialized;
