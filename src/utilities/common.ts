@@ -8,17 +8,14 @@ const logger = functions.logger;
 export async function handleError(error: Error, response?: Response) {
 	const serializedError = serializeError(error);
 
-	let additionalInfoText = '';
 	if (error instanceof CustomError && error.additionalInfo) {
 		if (typeof error.additionalInfo === 'string') {
-			additionalInfoText = `<p><strong>Additional Info:</strong><br>${error.additionalInfo.replace(/\n/g, '<br>')}</p>`;
 		} else {
 			try {
 				const parsedAdditionalInfo = safeStringify(error.additionalInfo, 2);
-				additionalInfoText = `<p><strong>Additional Info:</strong><br>${parsedAdditionalInfo.replace(/\n/g, '<br>')}</p>`;
+
 				logger.log({ Additional_Info: JSON.parse(parsedAdditionalInfo) });
 			} catch (e) {
-				additionalInfoText = `<p><strong>Additional Info:</strong><br>${safeStringify(error.additionalInfo, 2).replace(/\n/g, '<br>')}</p>`;
 				logger.log({ Additional_Info: error.additionalInfo });
 			}
 		}
@@ -29,7 +26,6 @@ export async function handleError(error: Error, response?: Response) {
         <p><strong>Error Message:</strong> ${error.message}</p>
         <p><strong>Error Stack:</strong><br>${error.stack?.replace(/\n/g, '<br>')}</p>
         <p><strong>Serialized Error:</strong><br>${safeStringify(serializedError, 2).replace(/\n/g, '<br>')}</p>
-        ${additionalInfoText}
     `;
 
 	const emailMessage = {

@@ -115,8 +115,10 @@ export const addMember = async (request: Request, response: Response) => {
 		logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
 	}
 
+	let axiosResponse!: AxiosResponse;
+
 	try {
-		const axiosResponse: AxiosResponse = await axios.post(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`, postData, {
+		axiosResponse = await axios.post(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`, postData, {
 			headers: {
 				Authorization: `Bearer ${bearer}`,
 				'Content-Type': 'application/json',
@@ -126,10 +128,11 @@ export const addMember = async (request: Request, response: Response) => {
 	} catch (e) {
 		// Capture additional information
 		const additionalInfo = {
-			bearerToken: bearer,
+			axiosResponse: axiosResponse,
+			email: email,
 			group: group,
-			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
+			timestamp: new Date().toISOString(),
 		};
 
 		// Log the error before throwing it as a CustomError
@@ -376,8 +379,10 @@ export const removeMember = async (request: Request, response: Response) => {
 	const { email } = request.headers;
 	const { group } = request.headers;
 
+	let axiosResponse!: AxiosResponse;
+
 	try {
-		const axiosResponse: AxiosResponse = await axios.delete(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members/${email}`, {
+		axiosResponse = await axios.delete(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members/${email}`, {
 			headers: {
 				Authorization: `Bearer ${bearer}`,
 			},
@@ -386,11 +391,11 @@ export const removeMember = async (request: Request, response: Response) => {
 	} catch (e) {
 		// Capture additional information
 		const additionalInfo = {
+			axiosResponse: axiosResponse,
 			email: email,
 			group: group,
-			bearerToken: bearer,
-			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
+			timestamp: new Date().toISOString(),
 		};
 
 		// Log the error before throwing it as a CustomError
