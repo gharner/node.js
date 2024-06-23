@@ -24,7 +24,6 @@ export async function handleError(error: Error, response?: Response) {
 	const messageText = `
         <p><strong>Error Name:</strong> ${error.name}</p>
         <p><strong>Error Message:</strong> ${error.message}</p>
-        <p><strong>Error Stack:</strong><br>${error.stack?.replace(/\n/g, '<br>')}</p>
         <p><strong>Serialized Error:</strong><br>${safeStringify(serializedError, 2).replace(/\n/g, '<br>')}</p>
     `;
 
