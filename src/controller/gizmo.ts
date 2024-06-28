@@ -49,12 +49,14 @@ async function getSchedules() {
 async function processSchedules(schedules: Schedule[]) {
 	for (const schedule of schedules) {
 		const notificationArray =
-			schedule.attendance?.map(m => {
-				if (m.notifications) {
-					return m.notifications;
-				}
-				return;
-			}) ?? [];
+			schedule.attendance
+				?.map(m => {
+					if (m.notifications) {
+						return m.notifications;
+					}
+					return null; // Return null instead of undefined
+				})
+				.filter(n => n !== null) ?? []; // Filter out null values
 
 		try {
 			if (notificationArray.length === 0) {
@@ -62,6 +64,9 @@ async function processSchedules(schedules: Schedule[]) {
 			}
 
 			const uniqueNotifications = getUniqueNotifications(notificationArray);
+
+			// Log the uniqueNotifications array for debugging
+			console.log('Unique Notifications:', uniqueNotifications);
 
 			const groupEmail = uniqueNotifications
 				.map((m: { email: string }) => m.email)
@@ -91,9 +96,10 @@ async function processSchedules(schedules: Schedule[]) {
 
 function getUniqueNotifications(notifications: any[]) {
 	const uniqueSet = new Set();
-	return notifications.filter((notification: unknown) => {
-		const duplicate = uniqueSet.has(notification);
-		uniqueSet.add(notification);
+	return notifications.filter((notification: { email?: string; phone?: string }) => {
+		const identifier = `${notification.email || ''}-${notification.phone || ''}`;
+		const duplicate = uniqueSet.has(identifier);
+		uniqueSet.add(identifier);
 		return !duplicate;
 	});
 }
