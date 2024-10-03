@@ -295,6 +295,7 @@ export const members = async (request: Request, response: Response) => {
 		const additionalInfo = {
 			bearerToken: bearer,
 			group: group,
+			url: `https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`,
 			nextPage: nextPage,
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
@@ -354,8 +355,7 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 		// Set merge: true to not overwrite any other data in the same document
 		await accountsCollection.doc(<string>account).set({ mas: { gapi: { user: data, token: tokens } } }, { merge: true });
 
-		const html_response =
-			'<!DOCTYPE html><html lang="en"><head><title>Google Token Response</title><script>window.close();</script></head><body><h4>New Token Issued</h4></body></html>';
+		const html_response = '<!DOCTYPE html><html lang="en"><head><title>Google Token Response</title><script>window.close();</script></head><body><h4>New Token Issued</h4></body></html>';
 		response.send(html_response);
 	} catch (e) {
 		// Capture additional information
