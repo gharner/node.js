@@ -1,10 +1,10 @@
 import { Request, Response } from 'express';
-import * as functions from 'firebase-functions';
+import * as functions from 'firebase-functions/v1';
 import { admin } from '../middleware/firebase';
 import { CustomError, handleError } from '../utilities/common';
 
 const logger = functions.logger;
-const firestore = functions.firestore;
+//const firestore = functions.firestore;
 
 export const space_station = (request: Request, response: Response) => {
 	const axios = require('axios');
@@ -52,7 +52,7 @@ export const getFirecloudDocuments = async (request: Request, response: Response
 	}
 };
 
-export const onAddSandboxDocument = firestore.document('sandbox-documents/{docId}').onCreate(async (snap, context) => {
+/* export const onAddSandboxDocument = firestore.document('sandbox-documents/{docId}').onCreate(async (snap, context) => {
 	logger.debug(`Running add document course trigger for document ${context.params.docId}`);
 
 	const db = admin.firestore();
@@ -69,7 +69,7 @@ export const onAddSandboxDocument = firestore.document('sandbox-documents/{docId
 
 		transaction.set(ref, data);
 	});
-});
+}); */
 
 export const htmlExample = (request: Request, response: Response) => {
 	response.render('index', { title: 'Home Page' });

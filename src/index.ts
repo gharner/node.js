@@ -1,10 +1,10 @@
 import Express from 'express';
-import * as functions from 'firebase-functions';
+import * as functions from 'firebase-functions/v1';
 import { dailyJobs } from './controller/gizmo';
 import { IRoutes } from './interfaces';
 import { cors } from './middleware/cors';
 import { routes } from './routes';
-import { onAddSandboxDocument } from './controller/sandbox';
+//import { onAddSandboxDocument } from './controller/sandbox';
 import path from 'path';
 
 routes.forEach((routerObj: IRoutes) => {
@@ -43,7 +43,7 @@ export const currentEnvironment = functions.https.onRequest((request, response) 
 	});
 });
 
-export { onAddSandboxDocument };
+//export { onAddSandboxDocument };
 
 /* const mainapp = Express();
 
