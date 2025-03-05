@@ -148,3 +148,87 @@ function dateLocalString(d: any) {
 
 	return d.toLocaleString('en-US', { timeZone: 'America/New_York' });
 }
+
+/*
+private async attendanceViolation() {
+	if (window.location.hostname === 'localhost') return;
+
+	try {
+		const currentTime = this.getCurrentISOTimeString();
+		const programs = await this.programsService.getProgramsWithReservations();
+		const schedules = await this.schedulesService.getSchedulesNotClosed(
+			currentTime,
+			programs.map(p => p.name)
+		);
+		const attendanceDetails = this.extractAttendanceDetails(schedules);
+
+		await Promise.all(attendanceDetails.map(detail => this.processAttendanceDetail(detail)));
+	} catch (error) {
+		this.logError('attendanceViolation', error);
+	}
+}
+
+private extractAttendanceDetails(schedules: Schedule[]) {
+	return schedules.flatMap(schedule => {
+		schedule.eventType = 'closed';
+		this.schedulesService.setScheduleById(schedule.id, schedule);
+
+		return (
+			schedule.attendance
+				?.map(att => ({
+					...att,
+					scheduleId: schedule.id,
+					endDate: schedule.end.dateTime,
+					cycleName: schedule.cycleName,
+					summary: schedule.summary,
+					attended: att.attended !== att.reserved,
+				}))
+				.filter(att => att?.attended) || []
+		);
+	});
+}
+	private composeEmailMessage(detail: any, email: string, violationCount: number) {
+		return {
+			sender: 'gh@yongsa.net',
+			to: 'gh@yongsa.net, tara.harner@yongsa.net, rachel.harner@yongsa.net',
+			subject: 'Attendance Violation',
+			text: `Name: ${detail.name}\nEmail: ${email}\nCycle: ${detail.cycleName}\nClass: ${detail.summary}\nScheduleId: ${detail.scheduleId}\nEnd Time: ${detail.endDate}\nTotal Violations: ${violationCount}`,
+		};
+	}
+
+		private async processAttendanceDetail(detail: any) {
+		try {
+			await this.accountsService.setAccountViolation(detail.id, detail);
+			const violations = await this.accountsService.getAccountViolations(detail.id, detail.cycleName);
+			const email = await this.determineEmailForDetail(detail);
+			const emailMessage = this.composeEmailMessage(detail, email, violations.length);
+
+			// Here, you might still need to use Firebase to send emails, but errors are reported via Sentry.
+			this.sendEmail(emailMessage);
+
+			if (email === 'error') {
+				Sentry.captureMessage('Attendance violation missing notification data', { extra: detail });
+			}
+		} catch (error) {
+			this.logError('processAttendanceDetail', error);
+		}
+	}
+
+
+	private async determineEmailForDetail(detail: any) {
+		try {
+			let account;
+			if (detail.notifications?.id) {
+				account = await this.accountsService.getAccountById(detail.notifications.id);
+			} else {
+				const accounts = await this.accountsService.getAccountsByLinkedProperties({ accountId: detail.id, person: detail.name, type: 'child' });
+				account = accounts.pop() || (await this.accountsService.getAccountById(detail.id));
+			}
+			return account?.emailAddresses?.value || 'error';
+		} catch (error) {
+			this.logError('determineEmailForDetail', error);
+			return 'error';
+		}
+	}
+
+*/
