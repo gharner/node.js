@@ -24,3 +24,16 @@ export interface Notifications {
 	name: string;
 	phone: string | undefined;
 }
+
+export interface AttendanceViolation {
+	action?: 'waive' | 'fee';
+	attended: boolean;
+	cycleName: string;
+	endDate: string;
+	id: string;
+	name: string;
+	notifications: Notifications;
+	reserved: boolean;
+	scheduleId: string;
+	summary: string;
+}
