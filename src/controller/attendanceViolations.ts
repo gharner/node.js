@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
-import { Program, Schedule } from '../interfaces';
+import moment from 'moment-timezone';
+import { Attendance, AttendanceViolation, Program, Schedule } from '../interfaces';
 import { admin } from '../middleware/firebase';
 import { CustomError, handleError } from '../utilities/common';
 
@@ -19,59 +20,121 @@ import { CustomError, handleError } from '../utilities/common';
 
 export const getSchedulesNotClosed = async (request: Request, response: Response) => {
 	try {
+		// Fetch program names
 		const programs = await getProgramsWithReservations();
-		const snapshot = await admin.firestore().collection('mas-schedules').where('eventType', '==', 'default').get();
-		const documents = snapshot.docs.map(doc => doc.data()) as Schedule[];
+		const programNames = programs.map(program => program.name);
 
-		response.status(200).send({ documents: documents, programs: programs });
+		const serverTimeInEventTZ = moment.tz('America/New_York');
+		console.log('moment in New York time zone', serverTimeInEventTZ.format());
+
+		const snapshot = await admin.firestore().collection('mas-schedules').where('end.dateTime', '<', serverTimeInEventTZ.format()).where('eventType', '==', 'default').get();
+
+		// If no documents exist, return a response
+		if (snapshot.empty) {
+			return response.status(200).json({ message: 'No schedules to update.' });
+		}
+
+		const documentsToUpdate: Schedule[] = [];
+		const documentsToReturn: Schedule[] = [];
+		const violations: Attendance[] = [];
+
+		// Process each schedule
+		for (const doc of snapshot.docs) {
+			const schedule = doc.data() as Schedule;
+			console.log(schedule);
+
+			// If summary is not in programNames OR event time has already passed, mark for closing
+			if (!programNames.includes(schedule.summary)) {
+				schedule.eventType = 'closed';
+				documentsToUpdate.push({ ...schedule });
+			} else {
+				documentsToReturn.push({ ...schedule });
+			}
+		}
+
+		// Process unattended reservations after all documents are added
+		const vData = await processUnattendedReservations(documentsToReturn);
+		violations.push(...vData);
+
+		// Update Firestore for documents that need to be closed
+		if (documentsToUpdate.length > 0) {
+			await updateSchedulesInFirestore(documentsToReturn);
+		}
+
+		// **Ensure function always returns a response**
+		return response.status(200).json({ updated: documentsToUpdate.length, violations: violations });
 	} catch (e: any) {
 		const additionalInfo = {
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
-		const customError = new CustomError('Failed to getFirecloudDocuments', 'controller=>sandbox=>getFirecloudDocuments', additionalInfo);
-		handleError(customError, response);
+		const customError = new CustomError('Failed to getSchedulesNotClosed', 'controller=>sandbox=>getSchedulesNotClosed', additionalInfo);
+		return handleError(customError, response);
 	}
 };
 
-async function getProgramsWithReservations() {
+async function getProgramsWithReservations(): Promise<Program[]> {
 	const snapshot = await admin.firestore().collection('mas-programs').where('optionReserve', '==', true).orderBy('name').get();
+
 	return snapshot.docs.map(doc => doc.data()) as Program[];
 }
 
+async function processUnattendedReservations(documentsToReturn: Schedule[]): Promise<AttendanceViolation[]> {
+	const unattendedViolations: AttendanceViolation[] = [];
+
+	documentsToReturn.forEach(schedule => {
+		if (!schedule.attendance || schedule.attendance.length === 0) {
+			return; // Skip schedules with no attendance
+		}
+
+		const unattendedAttendees = schedule.attendance.filter(attendee => attendee.reserved === true && attendee.attended === false);
+
+		unattendedAttendees.forEach(attendee => {
+			unattendedViolations.push({
+				action: undefined, // Can be set later to 'waive' or 'fee'
+				attended: attendee.attended,
+				cycleName: schedule.cycleName || 'Unknown Cycle',
+				endDate: schedule.end.dateTime,
+				id: attendee.id,
+				name: attendee.name,
+				notifications: attendee.notifications,
+				reserved: attendee.reserved,
+				scheduleId: schedule.id,
+				summary: schedule.summary,
+			});
+		});
+	});
+
+	return unattendedViolations;
+}
+
+async function updateSchedulesInFirestore(documents: Schedule[]) {
+	const batch = admin.firestore().batch();
+	const scheduleRef = admin.firestore().collection('mas-schedules');
+
+	for (const doc of documents) {
+		const docRef = scheduleRef.doc(doc.id);
+		batch.update(docRef, { eventType: 'closed' });
+	}
+
+	await batch.commit();
+}
+
 /*
+async function setAccountViolation(id: string, payload: any): Promise<void> {
+	const = admin.firestore().doc(`mas-accounts/${id}/mas-accounts-violation`, payload.scheduleId);
+
+	const ref = doc(this.firestore, `mas-accounts/${id}/mas-accounts-violation`, payload.scheduleId);
+	return await setDoc(ref, payload, { merge: true });
+}
+
 
 
 ! get schedules not closed
 
-check if summery is in list of programs requiring a reservation
-	if no: close schedule
-	if yes: extract attendance where reserved is true and attended is false.
 
-update the account violations collection
-
-export interface AttendanceViolation {
-	action?: 'waive' | 'fee';
-	attended: boolean;
-	cycleName: string;
-	endDate: string;
-	id: string;
-	name: string
-	notifications: Notifications;
-	reserved: boolean;
-	scheduleId: string;
-	summary: string;
-}
 
 write email to mas-email
-
-
-	async deleteAccountViolation(memberId: string, documentId: string): Promise<void> {
-		const ref = doc(this.firestore, `mas-accounts/${memberId}/mas-accounts-violation`, documentId);
-		return await deleteDoc(ref).then(doc => doc);
-	}
-
-
 	async setAccountViolation(id: string, payload: any): Promise<void> {
 		if (window.location.hostname == 'localhost') console.log('setAccountViolation=>payload', payload);
 
@@ -79,66 +142,7 @@ write email to mas-email
 		return await setDoc(ref, payload, { merge: true });
 	}
 
-async function getSchedulesNotClosed() {
 
-}
-		async function processSchedules(schedules: Schedule[]) {
-	for (const schedule of schedules) {
-		const notificationArray =
-			schedule.attendance
-				?.map(m => {
-					if (m.notifications) {
-						return m.notifications;
-					}
-					return null; // Return null instead of undefined
-				})
-				.filter(n => n !== null) ?? []; // Filter out null values
-
-		try {
-			if (notificationArray.length === 0) {
-				continue;
-			}
-
-			const uniqueNotifications = getUniqueNotifications(notificationArray);
-
-			// Log the uniqueNotifications array for debugging
-			console.log('Unique Notifications:', uniqueNotifications);
-
-			const groupEmail = uniqueNotifications
-				.map((m: { email: string }) => m.email)
-				.filter((email: string) => email)
-				.join();
-
-			if (groupEmail) {
-				await sendNotification('mas-email', 'accounts@yongsa.net', groupEmail, schedule);
-			}
-
-			for (const notify of uniqueNotifications.filter((f: { phone: string }) => f.phone)) {
-				await sendNotification('mas-twilio', notify.phone, '', schedule);
-			}
-		} catch (e) {
-			// Capture additional information
-			const additionalInfo = {
-				timestamp: new Date().toISOString(),
-				originalError: e instanceof Error ? e.message : 'Unknown error',
-			};
-
-			// Throw the CustomError with additional information
-			const customError = new CustomError('Failed processSchedules', 'controller=>gizmo=>processSchedules', additionalInfo);
-			handleError(customError);
-		}
-	}
-}
-
-function getUniqueNotifications(notifications: any[]) {
-	const uniqueSet = new Set();
-	return notifications.filter((notification: { email?: string; phone?: string }) => {
-		const identifier = `${notification.email || ''}-${notification.phone || ''}`;
-		const duplicate = uniqueSet.has(identifier);
-		uniqueSet.add(identifier);
-		return !duplicate;
-	});
-}
 
 async function sendNotification(collection: string, to: string, bcc: string, schedule: Schedule) {
 	const startDate = dateLocalString(schedule.start.dateTime);
@@ -173,35 +177,6 @@ async function sendNotification(collection: string, to: string, bcc: string, sch
 	}
 }
 
-function dateLocalString(d: any) {
-	if (typeof d === 'string') {
-		try {
-			d = new Date(d);
-		} catch {
-			throw new Error(`Cannot convert ${d} to a new date`);
-		}
-	}
-
-	return d.toLocaleString('en-US', { timeZone: 'America/New_York' });
-}
-
-private async attendanceViolation() {
-	if (window.location.hostname === 'localhost') return;
-
-	try {
-		const currentTime = this.getCurrentISOTimeString();
-		const programs = await this.programsService.getProgramsWithReservations();
-		const schedules = await this.schedulesService.getSchedulesNotClosed(
-			currentTime,
-			programs.map(p => p.name)
-		);
-		const attendanceDetails = this.extractAttendanceDetails(schedules);
-
-		await Promise.all(attendanceDetails.map(detail => this.processAttendanceDetail(detail)));
-	} catch (error) {
-		this.logError('attendanceViolation', error);
-	}
-}
 
 private extractAttendanceDetails(schedules: Schedule[]) {
 	return schedules.flatMap(schedule => {
@@ -265,5 +240,8 @@ private extractAttendanceDetails(schedules: Schedule[]) {
 			return 'error';
 		}
 	}
+
+
+
 
 */

@@ -6,12 +6,14 @@ export interface Schedule {
 	notifications?: Notifications[];
 	start: { dateTime: string; timeZone: string };
 	summary: string;
+	eventType: 'default' | 'closed';
 }
 
 export interface Attendance {
 	attendanceTotal?: number;
 	attended: boolean;
 	id: string;
+	scheduleId: string;
 	name: string;
 	notifications?: Notifications;
 	reserved: boolean;
@@ -32,7 +34,7 @@ export interface AttendanceViolation {
 	endDate: string;
 	id: string;
 	name: string;
-	notifications: Notifications;
+	notifications?: Notifications;
 	reserved: boolean;
 	scheduleId: string;
 	summary: string;

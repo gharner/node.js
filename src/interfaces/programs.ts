@@ -1,24 +1,20 @@
-export interface Program extends ProgramMemberships {
+export interface Program {
 	css?: string;
 	googleGroupId?: string;
-	googleGroupMembersCount: string;
+	googleGroupMembersCount: number;
 	googleSharedContactId?: string;
 	groupEmail: string;
-	id?: string;
+	id: string;
 	name: string;
 	optionReserve: boolean;
 	reserveLimit: number;
 	testCategory?: string;
+	memberships?: ProgramMember[];
 }
 
 export interface ProgramMember {
-	billingId: string;
-	billingName: string;
-	billingEmail: string;
+	billingId?: string;
+	billingEmail?: string;
 	memberId: string;
 	memberName: string;
-}
-
-export interface ProgramMemberships {
-	memberships?: ProgramMember[];
 }
