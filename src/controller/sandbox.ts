@@ -1,89 +1,65 @@
+import * as Sentry from '@sentry/google-cloud-serverless';
 import { Request, Response } from 'express';
 import * as functions from 'firebase-functions/v1';
 import { admin } from '../middleware/firebase';
-import { CustomError, handleError } from '../utilities/common';
 
 const logger = functions.logger;
-//const firestore = functions.firestore;
 
-export const space_station = (request: Request, response: Response) => {
-	const axios = require('axios');
+// Initialize Sentry
+Sentry.init({
+	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
+	tracesSampleRate: 1.0,
+});
 
-	const url = 'http://api.open-notify.org/iss-now.json';
+/**
+ * Fetches the current location of the International Space Station.
+ */
+export const space_station = async (request: Request, response: Response) => {
+	try {
+		const axios = require('axios');
+		const url = 'http://api.open-notify.org/iss-now.json';
 
-	const config = {
-		method: 'get',
-		url: url,
-	};
-
-	axios(config)
-		.then((result: any) => {
-			const data = JSON.stringify(result.data);
-			response.send(data);
-		})
-		.catch((e: any) => {
-			const additionalInfo = {
-				timestamp: new Date().toISOString(),
-				originalError: e instanceof Error ? e.message : 'Unknown error',
-			};
-
-			logger.error('Error in space_station:', additionalInfo);
-
-			const customError = new CustomError('Failed to space_station', 'controller=>sandbox=>space_station', additionalInfo);
-			handleError(customError, response);
-		});
+		const result = await axios.get(url);
+		response.send(result.data);
+	} catch (error) {
+		Sentry.captureException(error);
+		logger.error('Error in space_station:', error);
+		response.status(500).send({ error: 'Failed to retrieve space station data.' });
+	}
 };
+
+/**
+ * Fetches all documents from the 'mas-parameters' collection in Firestore.
+ */
 export const getFirecloudDocuments = async (request: Request, response: Response) => {
 	try {
 		const querySnapshot = await admin.firestore().collection('mas-parameters').get();
 		const documents = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
 		response.status(200).send(documents);
-	} catch (e: any) {
-		const additionalInfo = {
-			timestamp: new Date().toISOString(),
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-		};
-
-		logger.error('Error in getFirecloudDocuments:', additionalInfo);
-
-		const customError = new CustomError('Failed to getFirecloudDocuments', 'controller=>sandbox=>getFirecloudDocuments', additionalInfo);
-		handleError(customError, response);
+	} catch (error) {
+		Sentry.captureException(error);
+		logger.error('Error in getFirecloudDocuments:', error);
+		response.status(500).send({ error: 'Failed to retrieve Firestore documents.' });
 	}
 };
 
-/* export const onAddSandboxDocument = firestore.document('sandbox-documents/{docId}').onCreate(async (snap, context) => {
-	logger.debug(`Running add document course trigger for document ${context.params.docId}`);
-
-	const db = admin.firestore();
-	const sandboxDoc = snap.data();
-
-	logger.debug(sandboxDoc);
-
-	db.runTransaction(async transaction => {
-		const ref = db.doc('chat-roles/admin');
-		const data = (await transaction.get(ref)).data() as any;
-		data.value = { name: 'Greg' };
-
-		logger.debug(data);
-
-		transaction.set(ref, data);
-	});
-}); */
-
+/**
+ * Renders an example HTML page using EJS.
+ */
 export const htmlExample = (request: Request, response: Response) => {
 	response.render('index', { title: 'Home Page' });
 };
 
+/**
+ * Simulates an error to test Sentry error handling.
+ */
 export const testErrorHandler = (request: Request, response: Response) => {
 	try {
-		throw new CustomError('Something went wrong', 'Some custom value', { additional: 'info' });
-	} catch (e) {
-		const additionalInfo = {
-			timestamp: new Date().toISOString(),
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-		};
-		const customError = new CustomError('Failed sendNotification', 'controller=>sandbox=>testErrorHandler', additionalInfo);
-		handleError(customError, response);
+		throw new Error('Something went wrong');
+	} catch (error) {
+		Sentry.captureException(error);
+		logger.error('Error in testErrorHandler:', error);
+		response.status(500).send({ error: 'An error occurred.' });
 	}
 };

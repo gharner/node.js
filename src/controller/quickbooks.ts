@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/google-cloud-serverless';
 import axios, { AxiosResponse } from 'axios';
 import { Request, Response } from 'express';
 import { logger } from 'firebase-functions/v1';
@@ -6,15 +7,18 @@ import { qbToken } from '../interfaces';
 import { admin } from '../middleware/firebase';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
-import { CustomError, handleError, safeStringify } from '../utilities/common';
+
+// Initialize Sentry
+Sentry.init({
+	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
+	tracesSampleRate: 1.0,
+});
 
 const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
 
-/*******************************************************************************************
- *
- *  Functions require for authentication
- *
- *******************************************************************************************/
+/**
+ * OAuth Client Initialization for QuickBooks Authentication
+ */
 const oauthClient = new OAuthClient({
 	clientId: config.client_id,
 	clientSecret: config.client_secret,
@@ -23,141 +27,91 @@ const oauthClient = new OAuthClient({
 });
 
 const isQbToken = (obj: any): obj is qbToken => {
-	return (
-		obj &&
-		typeof obj.access_token === 'string' &&
-		typeof obj.expires_in === 'number' &&
-		typeof obj.refresh_token === 'string' &&
-		typeof obj.x_refresh_token_expires_in === 'number'
-	);
+	return obj && typeof obj.access_token === 'string' && typeof obj.expires_in === 'number';
 };
 
+/**
+ * Request QuickBooks Authorization URL
+ */
 export const auth_request = (request: Request, response: Response) => {
-	const errorArray: any[] = [];
 	try {
 		const auth_url = oauthClient.authorizeUri({
 			scope: config.scope,
 		});
-
-		errorArray.push({ auth_url: auth_url });
-
 		response.send(auth_url);
-	} catch (e) {
-		const additionalInfo = {
-			errorDetails: errorArray, // Include any collected error details
-			timestamp: new Date().toISOString(), // Add a timestamp
-			originalError: e instanceof Error ? e.message : 'Unknown error', // Original error message
-			stack: e instanceof Error ? e.stack : 'No stack trace available', // Include the stack trace if available
-			functionContext: 'controller=>quickbooks=>auth_request', // Contextual information about where the error occurred
-		};
-
-		logger.error('Error in auth_request:', additionalInfo);
-		const customError = new CustomError('Failed to get auth URL', 'Auth Error', additionalInfo);
-		handleError(customError, response);
+	} catch (error) {
+		Sentry.captureException(error);
+		logger.error('Error in auth_request:', error);
+		response.status(500).send({ error: 'Failed to get QuickBooks auth URL' });
 	}
 };
 
+/**
+ * Handle QuickBooks OAuth Token Exchange
+ */
 export const auth_token = async (request: Request, response: Response) => {
-	const errorArray: any[] = [];
-
 	try {
-		errorArray.push({ step: 'initializing', oauthClient: oauthClient });
+		const authResponse = await oauthClient.createToken(request.url); // No `.body` needed
+		const tokenData = authResponse.getJson(); // Use `.getJson()` to get token data
 
-		const parseRedirect = request.url;
-		errorArray.push({ step: 'parsing redirect', parseRedirect });
-
-		const authResponse: any = await oauthClient.createToken(parseRedirect);
-		errorArray.push({ step: 'creating token', authResponse });
-
-		if (!isQbToken(authResponse.body)) {
+		if (!isQbToken(tokenData)) {
 			throw new Error('Invalid token payload');
 		}
 
-		authResponse.body.server_time = Date.now();
-		const t1 = new Date();
+		tokenData.server_time = Date.now();
+		tokenData.expires_time = Date.now() + tokenData.expires_in * 1000;
+		tokenData.refresh_time = Date.now() + tokenData.x_refresh_token_expires_in * 1000;
 
-		t1.setSeconds(t1.getSeconds() + authResponse.body.expires_in);
-		authResponse.body.expires_time = t1.valueOf();
+		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(tokenData, { merge: true });
 
-		const t2 = new Date();
-		t2.setSeconds(t2.getSeconds() + authResponse.body.x_refresh_token_expires_in);
-		authResponse.body.refresh_time = t2.valueOf();
-
-		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
-
-		const htmlResponse = `
-            <!DOCTYPE html>
-            <html lang="en">
-                <head>
-                    <title>Quickbooks Token Response</title>
-                    <script>window.close();</script>
-                </head>
-                <body>
-                    <h4>New Token Issued</h4>
-                </body>
-            </html>
-        `;
-		response.send(htmlResponse);
-	} catch (e) {
-		const additionalInfo = {
-			...errorArray,
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-			timestamp: new Date().toISOString(),
-		};
-
-		logger.error('Error in auth_token:', additionalInfo);
-		const customError = new CustomError('Failed to get auth token', 'Auth Error', additionalInfo);
-		handleError(customError, response);
+		response.send(`
+      <!DOCTYPE html>
+      <html lang="en">
+        <head><title>Quickbooks Token Response</title><script>window.close();</script></head>
+        <body><h4>New Token Issued</h4></body>
+      </html>
+    `);
+	} catch (error) {
+		Sentry.captureException(error);
+		logger.error('Error in auth_token:', error);
+		response.status(500).send({ error: 'Failed to get QuickBooks auth token' });
 	}
 };
 
-export const refresh_token = async (request: Request, response: Response) => {
-	const errorArray: any[] = [];
-
+/**
+ * Refresh QuickBooks OAuth Token
+ */ export const refresh_token = async (request: Request, response: Response) => {
 	try {
-		const refreshToken = <string>request.headers['refresh_token'];
+		const refreshToken = request.headers['refresh_token'] as string;
 		if (!refreshToken) {
-			throw new CustomError('Missing refresh_token header', 'controller=>quickbooks=>refresh_token', { errorArray });
+			throw new Error('Missing refresh_token header');
 		}
 
-		const authResponse = await oauthClient.refreshUsingToken(refreshToken);
-		const safeResponse = safeStringify(authResponse);
-		const safeResponseJSON = JSON.parse(safeResponse);
+		const authResponse = await oauthClient.refreshUsingToken(refreshToken); // No `.body`
+		const tokenData = authResponse.getJson(); // Extract token data
 
-		errorArray.push(safeResponseJSON);
-
-		response.send(safeResponseJSON);
-	} catch (e) {
-		const additionalInfo = {
-			errorArray,
-			timestamp: new Date().toISOString(),
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-		};
-
-		const customError = new CustomError('Failed to refresh token', 'controller=>quickbooks=>refresh_token', additionalInfo);
-		handleError(customError, response);
+		response.send(tokenData);
+	} catch (error) {
+		Sentry.captureException(error);
+		logger.error('Error in refresh_token:', error);
+		response.status(500).send({ error: 'Failed to refresh QuickBooks token' });
 	}
 };
 
-/*******************************************************************************************
- *
- *  Functions that fetch and update Quickbook data
- *
- *******************************************************************************************/
+/**
+ * Get QuickBooks Updates Based on Last Sync
+ */
 export const get_updates = async (request: Request, response: Response) => {
-	const errorArray: any[] = [];
 	try {
 		const doc = await admin.firestore().doc('/mas-parameters/quickbooksAPI').get();
 		const data = doc.data() as qbToken;
-		errorArray.push(data);
 
 		if (!data || !data.expires_time) {
 			response.status(400).send({ error: 'Invalid or expired token' });
+			return;
 		}
 
 		const lastUpdated = new Date(data.lastCustomerUpdate).toISOString().substring(0, 10);
-		errorArray.push(lastUpdated);
-
 		const query = `Select * from Customer where Metadata.LastUpdatedTime > '${lastUpdated}'`;
 
 		const config = {
@@ -169,30 +123,22 @@ export const get_updates = async (request: Request, response: Response) => {
 				Authorization: `Bearer ${request.headers.token}`,
 			},
 		};
-		errorArray.push(config);
 
 		const result: AxiosResponse = await axios(config);
-		errorArray.push(result.data.QueryResponse.Customer);
-		logger.log(result.data.QueryResponse.Customer);
-
 		response.send(result.data.QueryResponse.Customer);
-	} catch (e) {
-		const additionalInfo = {
-			errorArray,
-			timestamp: new Date().toISOString(),
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-		};
-
-		const customError = new CustomError('Failed to get_updates', 'controller=>quickbooks=>get_updates', additionalInfo);
-		handleError(customError, response);
+	} catch (error) {
+		Sentry.captureException(error);
+		logger.error('Error in get_updates:', error);
+		response.status(500).send({ error: 'Failed to get QuickBooks updates' });
 	}
 };
 
+/**
+ * Get QuickBooks Customer by Email
+ */
 export const getCustomerByEmail = async (request: Request, response: Response) => {
-	const errorArray: any[] = [];
 	try {
 		const query = `Select * from Customer where PrimaryEmailAddr = '${request.headers.email}'`;
-		errorArray.push(query);
 
 		const config = {
 			method: 'get',
@@ -203,20 +149,12 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 				Authorization: `Bearer ${request.headers.token}`,
 			},
 		};
-		errorArray.push(config);
 
 		const result: AxiosResponse = await axios(config);
-		errorArray.push(result.data.QueryResponse);
-
 		response.send(result.data.QueryResponse);
-	} catch (e) {
-		const additionalInfo = {
-			errorArray,
-			timestamp: new Date().toISOString(),
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-		};
-
-		const customError = new CustomError('Failed to getCustomerByEmail', 'controller=>quickbooks=>getCustomerByEmail', additionalInfo);
-		handleError(customError, response);
+	} catch (error) {
+		Sentry.captureException(error);
+		logger.error('Error in getCustomerByEmail:', error);
+		response.status(500).send({ error: 'Failed to retrieve QuickBooks customer by email' });
 	}
 };
