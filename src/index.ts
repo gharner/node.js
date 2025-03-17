@@ -11,7 +11,8 @@ import { routes } from './routes';
 // Initialize Sentry for error tracking
 Sentry.init({
 	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
-	tracesSampleRate: 1.0, // Adjust sample rate as needed
+	release: `my-firebase-functions@${process.env.SENTRY_RELEASE || 'dev'}`,
+	tracesSampleRate: 1.0,
 });
 
 /**
