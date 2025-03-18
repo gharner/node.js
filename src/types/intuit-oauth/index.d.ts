@@ -1,4 +1,3 @@
-/* eslint-disable max-classes-per-file */
 declare module 'intuit-oauth' {
 	import csrf from 'csrf';
 
