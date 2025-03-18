@@ -1,6 +1,5 @@
 import * as Sentry from '@sentry/google-cloud-serverless';
-import { Schedule } from '../interfaces';
-import { EmailMessage } from '../interfaces/common';
+import { EmailMessage, Schedule } from '../interfaces';
 import { admin } from '../middleware/firebase';
 
 // Initialize Sentry

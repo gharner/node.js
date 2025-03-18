@@ -113,6 +113,14 @@ export const currentEnvironment = functions.https.onRequest(async (request, resp
 	}
 });
 
+/* export const logEnv = functions.https.onRequest(async (req, res) => {
+	functions.logger.info('NODE_ENV:', process.env.NODE_ENV);
+	functions.logger.info('GCLOUD_PROJECT:', process.env.GCLOUD_PROJECT);
+	functions.logger.info('Firebase Config:', process.env.FIREBASE_CONFIG);
+	functions.logger.info('Loaded Environment Variables:', JSON.stringify(process.env, null, 2));
+	res.send('Logged environment variables.');
+});
+ */
 /**
  * Example Express app with EJS rendering.
  * This is commented out but can be enabled if needed for serving views.

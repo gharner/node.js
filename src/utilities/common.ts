@@ -1,8 +1,4 @@
 import * as Sentry from '@sentry/google-cloud-serverless';
-import { Response } from 'express';
-import * as functions from 'firebase-functions';
-
-const logger = functions.logger;
 
 // Initialize Sentry for error tracking
 Sentry.init({
@@ -15,7 +11,7 @@ Sentry.init({
  * @param error The error object
  * @param response Optional Express response object
  */
-export function handleError(error: Error, response?: Response) {
+/* export function handleError(error: Error, response?: Response) {
 	// Capture error in Sentry
 	Sentry.captureException(error);
 
@@ -27,4 +23,23 @@ export function handleError(error: Error, response?: Response) {
 	if (response) {
 		response.status(500).send({ error: error.message });
 	}
+} */
+
+export function safeStringify(obj: any, space: number = 2): string {
+	const cache = new Set();
+	return JSON.stringify(
+		obj,
+		function (key, value) {
+			if (typeof value === 'object' && value !== null) {
+				if (cache.has(value)) {
+					// Circular reference found, discard key
+					return;
+				}
+				// Store value in the cache
+				cache.add(value);
+			}
+			return value;
+		},
+		space
+	);
 }
