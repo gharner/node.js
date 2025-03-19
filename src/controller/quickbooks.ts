@@ -1,96 +1,260 @@
-import * as Sentry from '@sentry/google-cloud-serverless';
+import * as Sentry from '@sentry/node'; // Added Sentry import
+import axios, { AxiosResponse } from 'axios';
 import { Request, Response } from 'express';
 import { logger } from 'firebase-functions/v1';
-import { readFileSync } from 'fs';
-import path from 'path';
+import { qbToken } from '../interfaces';
+import { admin } from '../middleware/firebase';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
+import { safeStringify } from '../utilities/common';
 import OAuthClient from './OAuthClient';
+import Token from './Token';
 
-console.log(qbProd.redirect_uri);
-console.log(qbDev.redirect_uri);
-
+// Initialize Sentry
 Sentry.init({
-	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
-	tracesSampleRate: 1.0,
+	dsn: process.env.SENTRY_DSN, // Your Sentry DSN should be set in environment variables
+	environment: process.env.NODE_ENV || 'development',
 });
 
-// 🔹 Determine which config file to load
-const isDev = process.env.GCLOUD_PROJECT === 'mas-development-53ac7';
-const configPath = path.join(__dirname, `../middleware/quickbooks.${isDev ? 'dev' : 'prod'}.json`);
+const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
 
-// 🔹 Load configuration dynamically
-const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-
+/*******************************************************************************************
+ *
+ *  Functions require for authentication
+ *
+ *******************************************************************************************/
 const oauthClient = new OAuthClient({
 	clientId: config.client_id,
 	clientSecret: config.client_secret,
 	environment: config.state === 'development' ? 'sandbox' : 'production',
-	redirectUri: process.env.FUNCTIONS_EMULATOR ? `http://localhost:5001/${process.env.GCLOUD_PROJECT}/us-central1/qb/quickBooksCallback` : config.redirect_uri,
-	logging: true,
+	redirectUri: process.env.FUNCTIONS_EMULATOR ? `http://localhost:5001/${process.env.GCLOUD_PROJECT}/us-central1/qb/auth_token` : config.redirect_uri,
 });
 
-export const getQuickBooksAuthUrl = async (request: Request, response: Response) => {
+const isQbToken = (obj: any): obj is qbToken => {
+	return obj && typeof obj.access_token === 'string' && typeof obj.expires_in === 'number' && typeof obj.refresh_token === 'string' && typeof obj.x_refresh_token_expires_in === 'number';
+};
+
+export const auth_request = (request: Request, response: Response) => {
+	const errorArray: any[] = [];
 	try {
-		const authUri = oauthClient.authorizeUri({
-			scope: [OAuthClient.scopes.Accounting, OAuthClient.scopes.OpenId],
-			state: config.state,
+		const auth_url = oauthClient.authorizeUri({
+			scope: [config.scope],
 		});
-		response.redirect(authUri);
-	} catch (error) {
-		Sentry.captureException(error);
-		console.error('Error generating QuickBooks auth URL:', error);
-		response.status(500).send('Error generating QuickBooks auth URL');
+
+		errorArray.push({ auth_url: auth_url });
+
+		response.send(auth_url);
+	} catch (e) {
+		const additionalInfo = {
+			errorDetails: errorArray, // Include any collected error details
+			timestamp: new Date().toISOString(), // Add a timestamp
+			originalError: e instanceof Error ? e.message : 'Unknown error', // Original error message
+			stack: e instanceof Error ? e.stack : 'No stack trace available', // Include the stack trace if available
+			functionContext: 'controller=>quickbooks=>auth_request', // Contextual information about where the error occurred
+		};
+
+		Sentry.captureException(e); // Report error to Sentry
+		logger.error('Error in auth_request:', additionalInfo);
 	}
 };
 
-export const quickBooksCallback = async (request: Request, response: Response) => {
-	try {
-		const authResponse = await oauthClient.createToken(request.url);
-		const tokenJson = authResponse.getJson();
-		response.json({ success: true, token: tokenJson });
-	} catch (error) {
-		Sentry.captureException(error);
-		console.error('OAuth error:', error);
-		response.status(500).send('OAuth authentication failed.');
-	}
-};
+export const auth_token = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
 
-export const refreshQuickBooksToken = async (request: Request, response: Response) => {
 	try {
-		const refreshToken = request.headers['refresh_token'];
+		errorArray.push({ step: 'initializing', oauthClient: oauthClient });
 
-		if (!refreshToken) {
-			const error = new Error('The Refresh token is missing');
-			Sentry.captureException(error);
-			throw error;
+		const parseRedirect = request.url;
+		errorArray.push({ step: 'parsing redirect', parseRedirect });
+
+		const authResponse: any = await oauthClient.createToken(parseRedirect);
+		errorArray.push({ step: 'creating token', authResponse });
+
+		if (!isQbToken(authResponse.body)) {
+			throw new Error('Invalid token payload');
 		}
 
-		const refreshResponse = await oauthClient.refresh();
-		const refreshedTokenJson = refreshResponse.getJson();
+		authResponse.body.server_time = Date.now();
+		const t1 = new Date();
 
-		response.json({ success: true, token: refreshedTokenJson });
-	} catch (error) {
-		Sentry.captureException(error);
-		console.error('Refresh Token Error:', error);
-		response.status(500).send('Error refreshing QuickBooks token.');
+		t1.setSeconds(t1.getSeconds() + authResponse.body.expires_in);
+		authResponse.body.expires_time = t1.valueOf();
+
+		const t2 = new Date();
+		t2.setSeconds(t2.getSeconds() + authResponse.body.x_refresh_token_expires_in);
+		authResponse.body.refresh_time = t2.valueOf();
+
+		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
+
+		const htmlResponse = `
+            <!DOCTYPE html>
+            <html lang="en">
+                <head>
+                    <title>Quickbooks Token Response</title>
+                    <script>window.close();</script>
+                </head>
+                <body>
+                    <h4>New Token Issued</h4>
+                </body>
+            </html>
+        `;
+		response.send(htmlResponse);
+	} catch (e) {
+		const additionalInfo = {
+			...errorArray,
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+			timestamp: new Date().toISOString(),
+		};
+
+		Sentry.captureException(e); // Report error to Sentry
+		logger.error('Error in auth_token:', additionalInfo);
 	}
 };
 
-export const refreshUsingToken = async (request: Request, response: Response) => {
+export const refresh_token = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
+
 	try {
-		const refreshToken = request.headers['refresh_token'] as string;
+		const refreshToken = <string>request.headers['refresh_token'];
 		if (!refreshToken) {
-			throw new Error('Missing refresh_token header');
+			console.log('Missing refresh_token header', 'controller=>quickbooks=>refresh_token', { errorArray });
 		}
 
 		const authResponse = await oauthClient.refreshUsingToken(refreshToken);
-		const tokenData = authResponse.getJson();
+		const safeResponse = safeStringify(authResponse);
+		const safeResponseJSON = JSON.parse(safeResponse);
 
-		response.send(tokenData);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in refresh_token:', error);
-		response.status(500).send({ error: 'Failed to refresh QuickBooks token' });
+		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
+
+		errorArray.push(safeResponseJSON);
+
+		response.send(safeResponseJSON);
+	} catch (e) {
+		const additionalInfo = {
+			errorArray,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		Sentry.captureException(e); // Report error to Sentry
+		console.log('Failed to refresh token', 'controller=>quickbooks=>refresh_token', additionalInfo);
+	}
+};
+
+/*******************************************************************************************
+ *
+ *  Functions that fetch and update Quickbook data
+ *
+ *******************************************************************************************/
+export const get_updates = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
+	try {
+		const doc = await admin.firestore().doc('/mas-parameters/quickbooksAPI').get();
+		const data = doc.data() as qbToken;
+		errorArray.push(data);
+
+		if (!data || !data.expires_time) {
+			response.status(400).send({ error: 'Invalid or expired token' });
+		}
+
+		const lastUpdated = new Date(data.lastCustomerUpdate).toISOString().substring(0, 10);
+		errorArray.push(lastUpdated);
+
+		const query = `Select * from Customer where Metadata.LastUpdatedTime > '${lastUpdated}'`;
+
+		const config = {
+			method: 'get',
+			url: `https://${request.headers.endpoint}/v3/company/${request.headers.company}/query?query=${query}`,
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${request.headers.token}`,
+			},
+		};
+		errorArray.push(config);
+
+		const result: AxiosResponse = await axios(config);
+		errorArray.push(result.data.QueryResponse.Customer);
+		logger.log(result.data.QueryResponse.Customer);
+
+		response.send(result.data.QueryResponse.Customer);
+	} catch (e) {
+		const additionalInfo = {
+			errorArray,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		Sentry.captureException(e); // Report error to Sentry
+		console.log('Failed to get_updates', 'controller=>quickbooks=>get_updates', additionalInfo);
+	}
+};
+
+export const getCustomerByEmail = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
+	try {
+		const query = `Select * from Customer where PrimaryEmailAddr = '${request.headers.email}'`;
+		errorArray.push(query);
+
+		const config = {
+			method: 'get',
+			url: `https://${request.headers.endpoint}/v3/company/${request.headers.company}/query?query=${query}`,
+			headers: {
+				Accept: 'application/json',
+				'Content-Type': 'application/text',
+				Authorization: `Bearer ${request.headers.token}`,
+			},
+		};
+		errorArray.push(config);
+
+		const result: AxiosResponse = await axios(config);
+		errorArray.push(result.data.QueryResponse);
+
+		response.send(result.data.QueryResponse);
+	} catch (e) {
+		const additionalInfo = {
+			errorArray,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		Sentry.captureException(e); // Report error to Sentry
+		console.log('Failed to getCustomerByEmail', 'controller=>quickbooks=>getCustomerByEmail', additionalInfo);
+	}
+};
+
+export const validateToken = async (request: Request, response: Response) => {
+	const errorArray: any[] = [];
+
+	try {
+		const tokenData: Token = new Token(request.body);
+		errorArray.push({ step: 'received token', tokenData });
+
+		if (!tokenData || !tokenData.access_token) {
+			throw new Error('No valid token provided');
+		}
+
+		const isAccessTokenValid = tokenData.isAccessTokenValid();
+		const isRefreshTokenValid = tokenData.isRefreshTokenValid();
+		errorArray.push({ step: 'token validation', isAccessTokenValid, isRefreshTokenValid });
+		const tokenState: { validAccessToken: boolean; validRefreshToken: boolean } = { validAccessToken: isAccessTokenValid, validRefreshToken: isRefreshTokenValid };
+
+		if (isAccessTokenValid) {
+			response.send({ message: 'Access token is valid', tokenState: tokenState });
+		} else if (isRefreshTokenValid) {
+			response.send({ message: 'Access token expired, but refresh token is valid', tokenState: tokenState });
+		} else {
+			response.send({ message: 'Both access and refresh tokens are expired', tokenState: tokenState });
+		}
+	} catch (e) {
+		const additionalInfo = {
+			errorArray,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		Sentry.captureException(e);
+		console.error('Error in validateToken:', additionalInfo);
+		response.status(400).send({ error: 'Failed to validate token', details: additionalInfo });
 	}
 };

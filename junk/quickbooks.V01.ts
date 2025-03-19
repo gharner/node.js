@@ -5,8 +5,8 @@ import { logger } from 'firebase-functions/v1';
 import OAuthClient from 'intuit-oauth';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
-import { qbToken } from './src/interfaces';
-import { admin } from './src/middleware/firebase';
+import { qbToken } from '../src/interfaces';
+import { admin } from '../src/middleware/firebase';
 
 const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
 

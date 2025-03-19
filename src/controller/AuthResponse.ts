@@ -1,10 +1,10 @@
 import { AxiosResponse } from 'axios';
 
 export interface AuthResponseParams {
-	token?: any; // Replace with your Token type if available
+	intuit_tid?: string;
 	response?: AxiosResponse<any>;
 	responseText?: string;
-	intuit_tid?: string;
+	token?: any; // Replace with your Token type if available
 }
 
 export default class AuthResponse {
@@ -12,11 +12,11 @@ export default class AuthResponse {
 	static _jsonContentType: string = 'application/json';
 	static _urlencodedContentType: string = 'application/x-www-form-urlencoded';
 
-	token: any;
-	response: AxiosResponse<any> | null;
 	body: string;
-	json: any;
 	intuit_tid: string;
+	json: any;
+	response: AxiosResponse<any> | null;
+	token: any;
 
 	constructor(params: AuthResponseParams = {}) {
 		this.token = params.token || '';

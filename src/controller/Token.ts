@@ -1,49 +1,60 @@
 export interface TokenParams {
-	realmId?: string;
-	token_type?: string;
 	access_token?: string;
-	refresh_token?: string;
+	createdAt?: number;
 	expires_in?: number;
-	x_refresh_token_expires_in?: number;
+	expires_time?: number; // Add this
+	refresh_expires_time?: number; // Add this
 	id_token?: string;
 	latency?: number;
-	createdAt?: number;
+	realmId?: string;
+	refresh_token?: string;
+	token_type?: string;
+	x_refresh_token_expires_in?: number;
 }
 
 export interface TokenData {
-	token_type: string;
 	access_token: string;
-	expires_in: number;
-	refresh_token: string;
-	x_refresh_token_expires_in: number;
-	realmId: string;
-	id_token: string;
 	createdAt: number;
+	expires_in: number;
+	expires_time?: number; // Add this
+	refresh_expires_time?: number; // Add this
+	id_token: string;
+	realmId: string;
+	refresh_token: string;
+	token_type: string;
+	x_refresh_token_expires_in: number;
 }
 
 export default class Token {
-	realmId: string;
-	token_type: string;
 	access_token: string;
-	refresh_token: string;
+	createdAt: number;
 	expires_in: number;
-	x_refresh_token_expires_in: number;
+	expires_time: number; // Add this
+	refresh_expires_time: number; // Add this
 	id_token: string;
 	latency: number;
-	createdAt: number;
+	realmId: string;
+	refresh_token: string;
+	token_type: string;
+	x_refresh_token_expires_in: number;
 
 	constructor(params: TokenParams = {}) {
-		this.realmId = params.realmId || '';
-		this.token_type = params.token_type || '';
 		this.access_token = params.access_token || '';
-		this.refresh_token = params.refresh_token || '';
+		this.createdAt = params.createdAt || Date.now();
 		this.expires_in = params.expires_in || 0;
-		this.x_refresh_token_expires_in = params.x_refresh_token_expires_in || 0;
+		this.expires_time = params.expires_time || this.calculateExpiresTime(params.expires_in); // Add this
+		this.refresh_expires_time = params.refresh_expires_time || this.calculateExpiresTime(params.x_refresh_token_expires_in); // Add this
 		this.id_token = params.id_token || '';
 		this.latency = params.latency || 60 * 1000;
-		this.createdAt = params.createdAt || Date.now();
+		this.realmId = params.realmId || '';
+		this.refresh_token = params.refresh_token || '';
+		this.token_type = params.token_type || '';
+		this.x_refresh_token_expires_in = params.x_refresh_token_expires_in || 0;
 	}
 
+	private calculateExpiresTime(expiresIn?: number): number {
+		return expiresIn ? Date.now() + expiresIn * 1000 : 0;
+	}
 	/**
 	 * Get the access token.
 	 * @returns {string} The access token.
@@ -116,29 +127,15 @@ export default class Token {
 		return this;
 	}
 
-	/**
-	 * Helper method to check token expiry.
-	 * @param seconds - The number of seconds until expiry.
-	 * @returns {boolean} True if the token is still valid, false otherwise.
-	 */
-	private _checkExpiry(seconds: number): boolean {
-		const expiry = this.createdAt + seconds * 1000;
-		return expiry - this.latency > Date.now();
+	private _checkExpiry(expiryTime?: number): boolean {
+		return expiryTime ? expiryTime > Date.now() : false;
 	}
 
-	/**
-	 * Check if the access token is valid.
-	 * @returns {boolean} True if valid, false if expired.
-	 */
 	isAccessTokenValid(): boolean {
-		return this._checkExpiry(this.expires_in);
+		return this._checkExpiry(this.expires_time);
 	}
 
-	/**
-	 * Check if the refresh token is valid.
-	 * @returns {boolean} True if valid, false if expired.
-	 */
 	isRefreshTokenValid(): boolean {
-		return this._checkExpiry(this.x_refresh_token_expires_in);
+		return this._checkExpiry(this.refresh_expires_time);
 	}
 }
