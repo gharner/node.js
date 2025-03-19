@@ -1,29 +1,18 @@
-import * as Sentry from '@sentry/google-cloud-serverless';
 import axios, { AxiosResponse } from 'axios';
 import { Request, Response } from 'express';
-import { logger } from 'firebase-functions';
-import { GaxiosResponse } from 'gaxios';
+import { admin } from '../middleware/firebase';
 import { google } from 'googleapis';
 import { xml2json } from 'xml-js';
-import { admin } from '../middleware/firebase';
+import { GaxiosResponse } from 'gaxios';
+import { logger } from 'firebase-functions';
+import { CustomError, handleError } from '../utilities/common';
 
-// Initialize Sentry
-Sentry.init({
-	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
-	tracesSampleRate: 1.0,
-});
-
-/**
- * Fetches an access token using a Google API refresh token and stores it in Firestore.
- */
+// Using GAPI authorization URL get token information and store it in Firecloud
 export const accessToken = async (request: Request, response: Response) => {
-	try {
-		const gapirefreshtoken = request.headers.gapirefreshtoken as string;
-		if (!gapirefreshtoken) {
-			throw new Error('Missing refresh token in request headers.');
-		}
+	const gapirefreshtoken = request.headers.gapirefreshtoken;
+	const refresh_token = { refresh_token: <string>gapirefreshtoken };
 
-		const refresh_token = { refresh_token: gapirefreshtoken };
+	try {
 		const REDIRECT = process.env.FUNCTIONS_EMULATOR ? 'http://127.0.0.1:5001/gregharner-84eb9/us-central1/gapi/oAuthCallback' : process.env.REDIRECT_URI;
 
 		const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
@@ -36,142 +25,163 @@ export const accessToken = async (request: Request, response: Response) => {
 			errorRedactor?: false;
 		};
 
-		if (!credentials.token) {
-			throw new Error('Failed to retrieve access token from Google API.');
-		}
-
 		if (process.env.FUNCTIONS_EMULATOR) {
 			logger.log(`credentials=${JSON.stringify(credentials, null, 2)}`);
 		}
 
 		const token = credentials.token;
-		const info = await oAuth2Client.getTokenInfo(token);
+
+		const info = await oAuth2Client.getTokenInfo(<string>token);
 
 		if (process.env.FUNCTIONS_EMULATOR) {
 			logger.log(`info=${JSON.stringify(info, null, 2)}`);
 		}
 
-		const accountQuery = await admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', info.email).get();
-
-		const accountData = accountQuery.docs.pop()?.data();
+		const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', info.email).get();
+		const accountData = (await accountByEmail).docs.pop()?.data();
 		const account = accountData?.id;
 
-		if (!account) {
-			throw new Error(`No account found for email: ${info.email}`);
-		}
-
-		await admin
-			.firestore()
-			.collection('mas-accounts')
-			.doc(account)
-			.set({ mas: { gapi: { token: credentials.res?.data } } }, { merge: true });
+		const accountsCollection = admin.firestore().collection('mas-accounts');
+		await accountsCollection.doc(<string>account).set({ mas: { gapi: { token: credentials.res?.data } } }, { merge: true });
 
 		response.status(200).send(token);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in accessToken:', error);
-		response.status(500).send({ error: 'Failed to retrieve access token' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting accessToken:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get accessToken', 'controller=>gapi=>accessToken', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Creates a Google Group.
- */
 export const addGroup = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { email } = request.headers;
+	const { group } = request.headers;
+
+	const postData = JSON.stringify({
+		email: email,
+		name: group,
+	});
+
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
+	}
+
 	try {
-		const { bearer, email, group } = request.headers;
-		if (!bearer || !email || !group) {
-			throw new Error('Missing required headers: bearer, email, or group.');
-		}
-
-		const postData = JSON.stringify({ email, name: group });
-
-		if (process.env.FUNCTIONS_EMULATOR) {
-			logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
-		}
-
 		const axiosResponse: AxiosResponse = await axios.post('https://admin.googleapis.com/admin/directory/v1/groups/', postData, {
 			headers: {
 				Authorization: `Bearer ${bearer}`,
 				'Content-Type': 'application/json',
 			},
 		});
-
 		response.send(axiosResponse.data);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in addGroup:', error);
-		response.status(500).send({ error: 'Failed to add Google group' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			group: group,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error addGroup:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed addGroup', 'controller=>gapi=>addGroup', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Adds a member to a Google Group.
- */
+// Add member to group given in request header
 export const addMember = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { email } = request.headers;
+	const { group } = request.headers;
+
+	const postData = JSON.stringify({
+		email: email,
+	});
+
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
+	}
+
+	let axiosResponse!: AxiosResponse;
+
 	try {
-		const { bearer, email, group } = request.headers;
-		if (!bearer || !email || !group) {
-			throw new Error('Missing required headers: bearer, email, or group.');
-		}
-
-		const postData = JSON.stringify({ email });
-
-		if (process.env.FUNCTIONS_EMULATOR) {
-			logger.log(`postData=${JSON.stringify(postData, null, 2)}`);
-		}
-
-		const axiosResponse: AxiosResponse = await axios.post(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`, postData, {
+		axiosResponse = await axios.post(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`, postData, {
 			headers: {
 				Authorization: `Bearer ${bearer}`,
 				'Content-Type': 'application/json',
 			},
 		});
-
 		response.send(axiosResponse.data);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in addMember:', error);
-		response.status(500).send({ error: 'Failed to add member to Google group' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			axiosResponse: axiosResponse,
+			email: email,
+			group: group,
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+			timestamp: new Date().toISOString(),
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error addMember:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed addMember', 'controller=>gapi=>addMember', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Retrieves the members of the Google Domain Directory.
- */
+// get the member of the Domain Directory
 export const directory = async (request: Request, response: Response) => {
-	try {
-		const { bearer } = request.headers;
-		if (!bearer) {
-			throw new Error('Missing required header: bearer.');
-		}
+	const { bearer } = request.headers;
 
+	try {
 		const axiosResponse: AxiosResponse = await axios.get('https://www.google.com/m8/feeds/contacts/yongsa.net/full', {
 			headers: {
 				Authorization: `Bearer ${bearer}`,
 				'GData-Version': '3.0',
 			},
 		});
-
 		const obj = xml2json(axiosResponse.data, { compact: true, spaces: 2 });
 		response.send(obj);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in directory:', error);
-		response.status(500).send({ error: 'Failed to retrieve directory' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting directory:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get directory', 'controller=>gapi=>directory', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Retrieves events from a Google Calendar.
- */
+// Get events from the Yongsa shared calendar
 export const events = async (request: Request, response: Response) => {
-	try {
-		const { bearer, calendar, start, filter } = request.headers;
-		if (!bearer || !calendar || !start) {
-			throw new Error('Missing required headers: bearer, calendar, or start.');
-		}
+	const { bearer } = request.headers;
+	const { calendar } = request.headers;
+	const { start } = request.headers;
+	const { filter } = request.headers;
 
+	try {
 		const axiosResponse: AxiosResponse = await axios.get(`https://www.googleapis.com/calendar/v3/calendars/${calendar}/events`, {
 			params: {
 				maxResults: 2500,
@@ -183,235 +193,238 @@ export const events = async (request: Request, response: Response) => {
 				Authorization: `Bearer ${bearer}`,
 			},
 		});
-
 		response.send(axiosResponse.data);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in events:', error);
-		response.status(500).send({ error: 'Failed to retrieve events' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting events:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get events', 'controller=>gapi=>events', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Generates a Google login URL for OAuth2 authentication.
- */
+// Get a URL to initialize GAPI authorization routine
 export const googleLogin = (request: Request, response: Response) => {
-	try {
-		const SCOPES = process.env.SCOPES;
-		if (!SCOPES) {
-			throw new Error('Google OAuth SCOPES are not defined in environment variables.');
-		}
+	const SCOPES = process.env.SCOPES;
 
-		const REDIRECT = process.env.FUNCTIONS_EMULATOR ? `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT}/us-central1/gapi/oAuthCallback` : process.env.REDIRECT_URI;
+	const REDIRECT = process.env.FUNCTIONS_EMULATOR ? `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT}/us-central1/gapi/oAuthCallback` : process.env.REDIRECT_URI;
 
-		const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
+	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
 
-		const authUrl = oAuth2Client.generateAuthUrl({
-			access_type: 'offline',
-			scope: SCOPES,
-			prompt: 'consent',
-		});
+	const authUrl = oAuth2Client.generateAuthUrl({
+		access_type: 'offline',
+		scope: SCOPES,
+		prompt: 'consent',
+	});
 
-		if (process.env.FUNCTIONS_EMULATOR) {
-			logger.log(authUrl);
-		}
-
-		response.set('Cache-Control', 'private, max-age=0, s-maxage=0');
-		response.send(authUrl);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in googleLogin:', error);
-		response.status(500).send({ error: 'Failed to generate Google login URL' });
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(authUrl);
 	}
+
+	response.set('Cache-Control', 'private, max-age=0, s-maxage=0');
+	response.send(authUrl);
 };
 
-/**
- * Retrieves Google Group information.
- */
+// Get Google Group information
 export const group = async (request: Request, response: Response) => {
-	try {
-		const { bearer, group } = request.headers;
-		if (!bearer || !group) {
-			throw new Error('Missing required headers: bearer or group.');
-		}
+	const { bearer } = request.headers;
+	const { group } = request.headers;
 
+	try {
 		const axiosResponse: AxiosResponse = await axios.get(`https://admin.googleapis.com/admin/directory/v1/groups/${group}`, {
 			headers: {
 				Authorization: `Bearer ${bearer}`,
 			},
 		});
-
 		response.send(axiosResponse.data);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in group:', error);
-		response.status(500).send({ error: 'Failed to retrieve group information' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			group: group,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting group:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get group', 'controller=>gapi=>group', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Retrieves members of a Google Group.
- */
+// Get Google Group Members information
 export const members = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { group } = request.headers;
+	const { nextPage } = request.headers;
+
+	const params: any = {
+		maxResults: 2500,
+	};
+	if (nextPage) {
+		params.pageToken = nextPage;
+	}
+
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(`bearer=${bearer}`);
+		logger.log(`group=${group}`);
+		logger.log(`nextPage=${nextPage}`);
+	}
+
 	try {
-		const { bearer, group, nextPage } = request.headers;
-		if (!bearer || !group) {
-			throw new Error('Missing required headers: bearer or group.');
-		}
-
-		const params: any = {
-			maxResults: 2500,
-		};
-		if (nextPage) {
-			params.pageToken = nextPage;
-		}
-
-		if (process.env.FUNCTIONS_EMULATOR) {
-			logger.log(`bearer=${bearer}`);
-			logger.log(`group=${group}`);
-			logger.log(`nextPage=${nextPage}`);
-		}
-
 		const axiosResponse: AxiosResponse = await axios.get(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`, {
 			params,
 			headers: {
 				Authorization: `Bearer ${bearer}`,
 			},
 		});
-
 		response.send(axiosResponse.data);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in members:', error);
-		response.status(500).send({ error: 'Failed to retrieve group members' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			bearerToken: bearer,
+			group: group,
+			url: `https://admin.googleapis.com/admin/directory/v1/groups/${group}/members`,
+			nextPage: nextPage,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error getting members:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to get members', 'controller=>gapi=>members', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Handles the Google OAuth2 redirect callback.
- */
+// Handles to redirect url callback
 export const oAuthCallback = async (request: Request, response: Response) => {
+	const { query: { error, code } = {} } = request;
+
+	// User may deny access to the application.
+	if (error) {
+		response.status(500).send(error);
+		return;
+	}
+
+	const REDIRECT = process.env.FUNCTIONS_EMULATOR ? `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT}/us-central1/gapi/oAuthCallback` : process.env.REDIRECT_URI;
+
+	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
+
+	// Exchange the authorization code for an access token.
+	const { tokens } = await oAuth2Client.getToken(<string>code);
+
+	oAuth2Client.setCredentials(tokens);
+
+	const oauth2 = google.oauth2({
+		auth: oAuth2Client,
+		version: 'v2',
+	});
+
+	// Get the user's email address and Google user ID
+	const { data } = await oauth2.userinfo.get();
+	const { email } = data;
+
+	// Store the refresh token in the Firestore database.
+	const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', email).get();
+
+	const accountData = (await accountByEmail).docs.pop()?.data();
+
+	if (process.env.FUNCTIONS_EMULATOR) {
+		logger.log(accountData);
+	}
+
+	const account = accountData?.id;
+
 	try {
-		const { error, code } = request.query;
-		if (error) {
-			response.status(500).send(error);
-			return;
-		}
+		const accountsCollection = admin.firestore().collection('mas-accounts');
 
-		if (!code) {
-			throw new Error('Authorization code is missing.');
-		}
+		// Set merge: true to not overwrite any other data in the same document
+		await accountsCollection.doc(<string>account).set({ mas: { gapi: { user: data, token: tokens } } }, { merge: true });
 
-		const REDIRECT = process.env.FUNCTIONS_EMULATOR ? `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT}/us-central1/gapi/oAuthCallback` : process.env.REDIRECT_URI;
-
-		const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
-
-		// Exchange the authorization code for an access token.
-		const { tokens } = await oAuth2Client.getToken(code as string);
-		oAuth2Client.setCredentials(tokens);
-
-		const oauth2 = google.oauth2({
-			auth: oAuth2Client,
-			version: 'v2',
-		});
-
-		// Get the user's email address and Google user ID
-		const { data } = await oauth2.userinfo.get();
-		const { email } = data;
-
-		if (!email) {
-			throw new Error('Failed to retrieve email from Google OAuth.');
-		}
-
-		// Find account in Firestore
-		const accountQuery = await admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', email).get();
-
-		const accountData = accountQuery.docs.pop()?.data();
-		if (process.env.FUNCTIONS_EMULATOR) {
-			logger.log(accountData);
-		}
-
-		const account = accountData?.id;
-		if (!account) {
-			throw new Error(`No account found for email: ${email}`);
-		}
-
-		// Store user data and tokens in Firestore
-		await admin
-			.firestore()
-			.collection('mas-accounts')
-			.doc(account)
-			.set({ mas: { gapi: { user: data, token: tokens } } }, { merge: true });
-
-		const html_response = `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <title>Google Token Response</title>
-        <script>window.close();</script>
-      </head>
-      <body>
-        <h4>New Token Issued</h4>
-      </body>
-      </html>
-    `;
-
+		const html_response = '<!DOCTYPE html><html lang="en"><head><title>Google Token Response</title><script>window.close();</script></head><body><h4>New Token Issued</h4></body></html>';
 		response.send(html_response);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in oAuthCallback:', error);
-		response.status(500).send({ error: 'OAuth callback failed' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error oAuthCallback:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed oAuthCallback', 'controller=>gapi=>oAuthCallback', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Removes a member from a Google Group.
- */
+// Remove member from group given in request header
 export const removeMember = async (request: Request, response: Response) => {
-	try {
-		const { bearer, email, group } = request.headers;
-		if (!bearer || !email || !group) {
-			throw new Error('Missing required headers: bearer, email, or group.');
-		}
+	const { bearer } = request.headers;
+	const { email } = request.headers;
+	const { group } = request.headers;
 
-		const axiosResponse: AxiosResponse = await axios.delete(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members/${email}`, {
+	let axiosResponse!: AxiosResponse;
+
+	try {
+		axiosResponse = await axios.delete(`https://admin.googleapis.com/admin/directory/v1/groups/${group}/members/${email}`, {
 			headers: {
 				Authorization: `Bearer ${bearer}`,
 			},
 		});
-
 		response.send(axiosResponse.data);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in removeMember:', error);
-		response.status(500).send({ error: 'Failed to remove member' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			axiosResponse: axiosResponse,
+			email: email,
+			group: group,
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+			timestamp: new Date().toISOString(),
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error removing member:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to remove member', 'controller=>gapi=>removeMember', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Creates a shared Google Contact.
- */
 export const createSharedContact = async (request: Request, response: Response) => {
+	const { bearer } = request.headers;
+	const { email, name } = request.body;
+
+	const contactXML = `
+        <atom:entry xmlns:atom='http://www.w3.org/2005/Atom'
+                    xmlns:gd='http://schemas.google.com/g/2005'>
+            <atom:category scheme='http://schemas.google.com/g/2005#kind'
+                term='http://schemas.google.com/contact/2008#contact'/>
+            <gd:name>
+                <gd:fullName>${name}</gd:fullName>
+            </gd:name>
+            <gd:email rel='http://schemas.google.com/g/2005#work'
+                primary='true'
+                address='${email}' />
+        </atom:entry>`;
+
 	try {
-		const { bearer } = request.headers;
-		const { email, name } = request.body;
-		if (!bearer || !email || !name) {
-			throw new Error('Missing required headers or body parameters: bearer, email, or name.');
-		}
-
-		const contactXML = `
-      <atom:entry xmlns:atom='http://www.w3.org/2005/Atom'
-                  xmlns:gd='http://schemas.google.com/g/2005'>
-          <atom:category scheme='http://schemas.google.com/g/2005#kind'
-              term='http://schemas.google.com/contact/2008#contact'/>
-          <gd:name>
-              <gd:fullName>${name}</gd:fullName>
-          </gd:name>
-          <gd:email rel='http://schemas.google.com/g/2005#work'
-              primary='true'
-              address='${email}' />
-      </atom:entry>`;
-
 		const axiosResponse: AxiosResponse = await axios.post('https://www.google.com/m8/feeds/contacts/yongsa.net/full', contactXML, {
 			headers: {
 				Authorization: `Bearer ${bearer}`,
@@ -419,39 +432,55 @@ export const createSharedContact = async (request: Request, response: Response) 
 				'Content-Type': 'application/atom+xml',
 			},
 		});
-
 		logger.log('Contact created successfully:', axiosResponse.data);
 		response.send(axiosResponse.data);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in createSharedContact:', error);
-		response.status(500).send({ error: 'Failed to create shared contact' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			email: email,
+			name: name,
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error creating shared contact:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to create shared contact', 'controller=>gapi=>createSharedContact', additionalInfo);
+		handleError(customError, response);
 	}
 };
 
-/**
- * Removes a shared Google Contact.
- */
+// For future use. currently untested and not implemented
 export const removeSharedContact = async (request: Request, response: Response) => {
-	try {
-		const { bearer } = request.headers;
-		const { id } = request.body;
-		if (!bearer || !id) {
-			throw new Error('Missing required headers or body parameters: bearer or id.');
-		}
+	const { bearer } = request.headers;
+	const { id } = request.body;
 
+	try {
 		const axiosResponse: AxiosResponse = await axios.delete(`https://www.google.com/m8/feeds/contacts/yongsa.net/base/${id}`, {
 			headers: {
 				Authorization: `OAuth ${bearer}`,
 				'If-Match': '*',
 			},
 		});
-
-		logger.log('Shared contact removed:', axiosResponse.data);
+		logger.log(axiosResponse.data);
 		response.send(axiosResponse.data);
-	} catch (error) {
-		Sentry.captureException(error);
-		logger.error('Error in removeSharedContact:', error);
-		response.status(500).send({ error: 'Failed to remove shared contact' });
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			requestId: id,
+			bearerToken: bearer,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Log the error before throwing it as a CustomError
+		logger.error('Error removing shared contact:', additionalInfo);
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed to remove shared contact', 'controller=>gapi=>removeSharedContact', additionalInfo);
+		handleError(customError, response);
 	}
 };

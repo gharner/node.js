@@ -1,29 +1,21 @@
-import * as Sentry from '@sentry/google-cloud-serverless';
-import { EmailMessage, Schedule } from '../interfaces';
+import { Schedule } from '../interfaces';
 import { admin } from '../middleware/firebase';
-
-// Initialize Sentry
-Sentry.init({
-	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
-	tracesSampleRate: 1.0,
-});
-
-/**
- * Runs scheduled jobs daily.
- * This function fetches schedules from Firestore and processes them.
- */
+import { CustomError, handleError } from '../utilities/common';
+import { EmailMessage } from '../interfaces/common';
 export const dailyJobs = async () => {
-	try {
-		await getSchedules();
-	} catch (error) {
-		Sentry.captureException(error);
-		console.error('Error in dailyJobs:', error);
-	}
+	await getSchedules().catch(e => {
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed dailyJobs', 'controller=>gizmo=>dailyJobs', additionalInfo);
+		handleError(customError);
+	});
 };
 
-/**
- * Fetch schedules for the current day from Firestore.
- */
 async function getSchedules() {
 	const today = new Date();
 	today.setHours(today.getHours() - 4);
@@ -32,97 +24,94 @@ async function getSchedules() {
 	tomorrow.setDate(tomorrow.getDate() + 1);
 
 	const from = today.toISOString().slice(0, 10);
-	const to = tomorrow.toISOString().slice(0, 10);
 
-	if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
-		console.log('getSchedules=>Query Params', { from, to });
-	}
+	const to = tomorrow.toISOString().slice(0, 10);
 
 	try {
 		const snapshot = await admin.firestore().collection('mas-schedules').where('start.dateTime', '>', from).where('start.dateTime', '<', to).get();
 
-		if (snapshot.empty) {
-			console.warn('getSchedules=>No schedules found for today.');
-			return;
-		}
-
 		const data = snapshot.docs.map(doc => doc.data()) as Schedule[];
-		await processSchedules(data);
-	} catch (error) {
-		Sentry.captureException(error);
-		console.error('Error in getSchedules:', error);
+
+		processSchedules(data);
+	} catch (e) {
+		// Capture additional information
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
+
+		// Throw the CustomError with additional information
+		const customError = new CustomError('Failed getSchedules', 'controller=>gizmo=>getSchedules', additionalInfo);
+		handleError(customError);
 	}
 }
 
-/**
- * Process the retrieved schedules.
- */
 async function processSchedules(schedules: Schedule[]) {
 	for (const schedule of schedules) {
-		const notificationArray = schedule.attendance?.flatMap(m => m.notifications || []) ?? [];
-
-		if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
-			console.log('processSchedules=>Raw Notifications', notificationArray);
-		}
+		const notificationArray =
+			schedule.attendance
+				?.map(m => {
+					if (m.notifications) {
+						return m.notifications;
+					}
+					return null; // Return null instead of undefined
+				})
+				.filter(n => n !== null) ?? []; // Filter out null values
 
 		try {
 			if (notificationArray.length === 0) {
-				console.warn(`processSchedules=>No notifications found for schedule: ${schedule.summary}`);
 				continue;
 			}
 
 			const uniqueNotifications = getUniqueNotifications(notificationArray);
 
-			if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
-				console.log('processSchedules=>Unique Notifications', uniqueNotifications);
-			}
+			// Log the uniqueNotifications array for debugging
+			console.log('Unique Notifications:', uniqueNotifications);
 
 			const groupEmail = uniqueNotifications
-				.map(n => n.email)
-				.filter(email => email)
-				.join(',');
+				.map((m: { email: string }) => m.email)
+				.filter((email: string) => email)
+				.join();
 
 			if (groupEmail) {
-				await sendNotification('mas-email', 'accounts@yongsa.net', schedule, groupEmail);
+				await sendNotification('mas-email', 'accounts@yongsa.net', groupEmail, schedule);
 			}
 
-			for (const notify of uniqueNotifications.filter(n => n.phone)) {
-				await sendNotification('mas-twilio', notify.phone, schedule, '');
+			for (const notify of uniqueNotifications.filter((f: { phone: string }) => f.phone)) {
+				await sendNotification('mas-twilio', notify.phone, '', schedule);
 			}
-		} catch (error) {
-			Sentry.captureException(error);
-			console.error('Error in processSchedules:', error);
+		} catch (e) {
+			// Capture additional information
+			const additionalInfo = {
+				timestamp: new Date().toISOString(),
+				originalError: e instanceof Error ? e.message : 'Unknown error',
+			};
+
+			// Throw the CustomError with additional information
+			const customError = new CustomError('Failed processSchedules', 'controller=>gizmo=>processSchedules', additionalInfo);
+			handleError(customError);
 		}
 	}
 }
 
-/**
- * Remove duplicate notifications based on email and phone.
- */
 function getUniqueNotifications(notifications: any[]) {
-	const uniqueMap = new Map();
-
-	return notifications.filter(notification => {
-		const key = `${notification.email || ''}-${notification.phone || ''}`;
-		if (uniqueMap.has(key)) {
-			return false;
-		}
-		uniqueMap.set(key, true);
-		return true;
+	const uniqueSet = new Set();
+	return notifications.filter((notification: { email?: string; phone?: string }) => {
+		const identifier = `${notification.email || ''}-${notification.phone || ''}`;
+		const duplicate = uniqueSet.has(identifier);
+		uniqueSet.add(identifier);
+		return !duplicate;
 	});
 }
 
-/**
- * Send notifications via Firebase Firestore.
- */
-async function sendNotification(collection: string, to: string, schedule: Schedule, cc?: string) {
+async function sendNotification(collection: string, to: string, bcc: string, schedule: Schedule) {
 	const startDate = dateLocalString(schedule.start.dateTime);
 	let message: EmailMessage | { to: string; body: string };
 
 	if (collection === 'mas-email') {
 		message = {
-			to,
-			cc,
+			to: to,
+			bcc: bcc,
 			message: {
 				subject: `${schedule.summary} class reservation reminder`,
 				text: `You have a reservation for the ${schedule.summary} class at ${startDate}.`,
@@ -137,19 +126,17 @@ async function sendNotification(collection: string, to: string, schedule: Schedu
 
 	try {
 		await admin.firestore().collection(collection).add(message);
+	} catch (e) {
+		const additionalInfo = {
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e.message : 'Unknown error',
+		};
 
-		if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
-			console.log(`sendNotification=>Success [${collection}]`, message);
-		}
-	} catch (error) {
-		Sentry.captureException(error);
-		console.error('Error in sendNotification:', error);
+		const customError = new CustomError('Failed sendNotification', 'controller=>gizmo=>sendNotification', additionalInfo);
+		handleError(customError);
 	}
 }
 
-/**
- * Convert a date to a local string format in New York timezone.
- */
 function dateLocalString(d: any) {
 	if (typeof d === 'string') {
 		try {
@@ -158,5 +145,90 @@ function dateLocalString(d: any) {
 			throw new Error(`Cannot convert ${d} to a new date`);
 		}
 	}
+
 	return d.toLocaleString('en-US', { timeZone: 'America/New_York' });
 }
+
+/*
+private async attendanceViolation() {
+	if (window.location.hostname === 'localhost') return;
+
+	try {
+		const currentTime = this.getCurrentISOTimeString();
+		const programs = await this.programsService.getProgramsWithReservations();
+		const schedules = await this.schedulesService.getSchedulesNotClosed(
+			currentTime,
+			programs.map(p => p.name)
+		);
+		const attendanceDetails = this.extractAttendanceDetails(schedules);
+
+		await Promise.all(attendanceDetails.map(detail => this.processAttendanceDetail(detail)));
+	} catch (error) {
+		this.logError('attendanceViolation', error);
+	}
+}
+
+private extractAttendanceDetails(schedules: Schedule[]) {
+	return schedules.flatMap(schedule => {
+		schedule.eventType = 'closed';
+		this.schedulesService.setScheduleById(schedule.id, schedule);
+
+		return (
+			schedule.attendance
+				?.map(att => ({
+					...att,
+					scheduleId: schedule.id,
+					endDate: schedule.end.dateTime,
+					cycleName: schedule.cycleName,
+					summary: schedule.summary,
+					attended: att.attended !== att.reserved,
+				}))
+				.filter(att => att?.attended) || []
+		);
+	});
+}
+	private composeEmailMessage(detail: any, email: string, violationCount: number) {
+		return {
+			sender: 'gh@yongsa.net',
+			to: 'gh@yongsa.net, tara.harner@yongsa.net, rachel.harner@yongsa.net',
+			subject: 'Attendance Violation',
+			text: `Name: ${detail.name}\nEmail: ${email}\nCycle: ${detail.cycleName}\nClass: ${detail.summary}\nScheduleId: ${detail.scheduleId}\nEnd Time: ${detail.endDate}\nTotal Violations: ${violationCount}`,
+		};
+	}
+
+		private async processAttendanceDetail(detail: any) {
+		try {
+			await this.accountsService.setAccountViolation(detail.id, detail);
+			const violations = await this.accountsService.getAccountViolations(detail.id, detail.cycleName);
+			const email = await this.determineEmailForDetail(detail);
+			const emailMessage = this.composeEmailMessage(detail, email, violations.length);
+
+			// Here, you might still need to use Firebase to send emails, but errors are reported via Sentry.
+			this.sendEmail(emailMessage);
+
+			if (email === 'error') {
+				Sentry.captureMessage('Attendance violation missing notification data', { extra: detail });
+			}
+		} catch (error) {
+			this.logError('processAttendanceDetail', error);
+		}
+	}
+
+
+	private async determineEmailForDetail(detail: any) {
+		try {
+			let account;
+			if (detail.notifications?.id) {
+				account = await this.accountsService.getAccountById(detail.notifications.id);
+			} else {
+				const accounts = await this.accountsService.getAccountsByLinkedProperties({ accountId: detail.id, person: detail.name, type: 'child' });
+				account = accounts.pop() || (await this.accountsService.getAccountById(detail.id));
+			}
+			return account?.emailAddresses?.value || 'error';
+		} catch (error) {
+			this.logError('determineEmailForDetail', error);
+			return 'error';
+		}
+	}
+
+*/
