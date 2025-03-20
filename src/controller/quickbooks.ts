@@ -114,12 +114,10 @@ export const auth_token = async (request: Request, response: Response) => {
 };
 
 export const refresh_token = async (request: Request, response: Response) => {
-	const errorArray: any[] = [];
-
 	try {
 		const refreshToken = <string>request.headers['refresh_token'];
 		if (!refreshToken) {
-			console.log('Missing refresh_token header', 'controller=>quickbooks=>refresh_token', { errorArray });
+			console.log('Missing refresh_token header');
 		}
 
 		const authResponse = await oauthClient.refreshUsingToken(refreshToken);
@@ -127,13 +125,9 @@ export const refresh_token = async (request: Request, response: Response) => {
 		const safeResponseJSON = JSON.parse(safeResponse);
 
 		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
-
-		errorArray.push(safeResponseJSON);
-
 		response.send(safeResponseJSON);
 	} catch (e) {
 		const additionalInfo = {
-			errorArray,
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};

@@ -9,9 +9,13 @@ import { cors } from './middleware/cors';
 import { routes } from './routes';
 
 // Initialize Sentry for error tracking
+const isProd = process.env.GCLOUD_PROJECT === '"valiant-splicer-224515"';
+
 Sentry.init({
 	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
-	release: `my-firebase-functions@${process.env.SENTRY_RELEASE || 'dev'}`,
+	enabled: isProd,
+	environment: isProd ? 'production' : 'development',
+	release: '2025-03-19',
 	tracesSampleRate: 1.0,
 });
 
