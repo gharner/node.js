@@ -42,6 +42,11 @@ routes.forEach((routerObj: IRoutes) => {
 	app.set('view engine', 'ejs');
 	app.use(routerObj.router);
 
+	// Catch-all route for unmatched paths
+	app.all('*', (req, res) => {
+		res.status(404).json({ error: 'Route not found' });
+	});
+
 	// Handle errors and report them to Sentry
 	exports[routerObj.name] = functions.https.onRequest(async (req, res) => {
 		try {

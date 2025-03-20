@@ -127,15 +127,22 @@ export default class Token {
 		return this;
 	}
 
-	private _checkExpiry(expiryTime?: number): boolean {
-		return expiryTime ? expiryTime > Date.now() : false;
+	private _checkExpiry(expiryTime?: number | string): boolean {
+		const now = Date.now();
+		const expiry = typeof expiryTime === 'string' ? Number(expiryTime) : expiryTime;
+		console.log(`Checking expiry: ${expiry} vs now: ${now}`);
+		return expiry ? expiry > now : false;
 	}
 
 	isAccessTokenValid(): boolean {
-		return this._checkExpiry(this.expires_time);
+		const valid = this._checkExpiry(this.expires_time);
+		console.log(`Access token expiry: ${this.expires_time}, valid: ${valid}`);
+		return valid;
 	}
 
 	isRefreshTokenValid(): boolean {
-		return this._checkExpiry(this.refresh_expires_time);
+		const valid = this._checkExpiry(this.refresh_expires_time);
+		console.log(`Refresh token expiry: ${this.refresh_expires_time}, valid: ${valid}`);
+		return valid;
 	}
 }

@@ -76,13 +76,15 @@ export const auth_token = async (request: Request, response: Response) => {
 
 		authResponse.body.server_time = Date.now();
 		const t1 = new Date();
-
 		t1.setSeconds(t1.getSeconds() + authResponse.body.expires_in);
 		authResponse.body.expires_time = t1.valueOf();
 
 		const t2 = new Date();
 		t2.setSeconds(t2.getSeconds() + authResponse.body.x_refresh_token_expires_in);
 		authResponse.body.refresh_time = t2.valueOf();
+
+		// Fix for refresh_expires_time: assign it the same value as refresh_time
+		authResponse.body.refresh_expires_time = t2.valueOf();
 
 		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
 
@@ -228,6 +230,7 @@ export const validateToken = async (request: Request, response: Response) => {
 
 	try {
 		const tokenData: Token = new Token(request.body);
+		console.log('tokenData', tokenData);
 		errorArray.push({ step: 'received token', tokenData });
 
 		if (!tokenData || !tokenData.access_token) {
