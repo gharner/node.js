@@ -74,32 +74,37 @@ export const auth_token = async (request: Request, response: Response) => {
 			throw new Error('Invalid token payload');
 		}
 
-		authResponse.body.server_time = Date.now();
-		const t1 = new Date();
-		t1.setSeconds(t1.getSeconds() + authResponse.body.expires_in);
-		authResponse.body.expires_time = t1.valueOf();
+		// Use a single starting point for all calculations.
+		const serverTime = Date.now();
+		authResponse.body.server_time = serverTime;
 
-		const t2 = new Date();
-		t2.setSeconds(t2.getSeconds() + authResponse.body.x_refresh_token_expires_in);
-		authResponse.body.refresh_time = t2.valueOf();
+		// Calculate access token expiry using expires_in (in seconds).
+		const expiresDuration = authResponse.body.expires_in; // seconds
+		authResponse.body.expires_time = serverTime + expiresDuration * 1000;
+		console.log(authResponse.body.expires_time);
 
-		// Fix for refresh_expires_time: assign it the same value as refresh_time
-		authResponse.body.refresh_expires_time = t2.valueOf();
+		// Calculate refresh token expiry using x_refresh_token_expires_in (in seconds).
+		const refreshDuration = authResponse.body.x_refresh_token_expires_in; // seconds
+		authResponse.body.refresh_time = serverTime + refreshDuration * 1000;
+		console.log(authResponse.body.refresh_time);
 
-		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
+		// If you need a separate refresh_expires_time, you can assign it the refresh_time
+		authResponse.body.refresh_expires_time = authResponse.body.refresh_time;
+
+		await admin.firestore().doc('mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
 
 		const htmlResponse = `
-            <!DOCTYPE html>
-            <html lang="en">
-                <head>
-                    <title>Quickbooks Token Response</title>
-                    <script>window.close();</script>
-                </head>
-                <body>
-                    <h4>New Token Issued</h4>
-                </body>
-            </html>
-        `;
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <title>Quickbooks Token Response</title>
+          <script>window.close();</script>
+        </head>
+        <body>
+          <h4>New Token Issued</h4>
+        </body>
+      </html>
+    `;
 		response.send(htmlResponse);
 	} catch (e) {
 		const additionalInfo = {
