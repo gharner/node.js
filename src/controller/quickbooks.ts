@@ -84,8 +84,9 @@ export const auth_token = async (request: Request, response: Response) => {
 		console.log(authResponse.body.expires_time);
 
 		// Calculate refresh token expiry using x_refresh_token_expires_in (in seconds).
-		const refreshDuration = authResponse.body.x_refresh_token_expires_in; // seconds
-		authResponse.body.refresh_time = serverTime + refreshDuration * 1000;
+		/* 		const refreshDuration = authResponse.body.x_refresh_token_expires_in; // seconds
+		authResponse.body.refresh_time = serverTime + refreshDuration * 1000; */
+		authResponse.body.refresh_time = serverTime + expiresDuration * 1000;
 		console.log(authResponse.body.refresh_time);
 
 		// If you need a separate refresh_expires_time, you can assign it the refresh_time
@@ -124,13 +125,29 @@ export const refresh_token = async (request: Request, response: Response) => {
 		const refreshToken = <string>request.headers['refresh_token'];
 		if (!refreshToken) {
 			console.log('Missing refresh_token header');
+			throw new Error('Missing refresh_token header');
 		}
 
 		const authResponse = await oauthClient.refreshUsingToken(refreshToken);
 		const safeResponse = safeStringify(authResponse);
 		const safeResponseJSON = JSON.parse(safeResponse);
 
+		// ⏱️ Add timing fields just like in auth_token
+		const serverTime = Date.now();
+		authResponse.body.server_time = serverTime;
+
+		const expiresDuration = authResponse.body.expires_in; // seconds
+		authResponse.body.expires_time = serverTime + expiresDuration * 1000;
+
+		const refreshDuration = authResponse.body.x_refresh_token_expires_in; // seconds
+		authResponse.body.refresh_time = serverTime + refreshDuration * 1000;
+
+		authResponse.body.refresh_expires_time = authResponse.body.refresh_time;
+
+		// 🔥 Write to Firestore with the updated token
 		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
+
+		// Return to client
 		response.send(safeResponseJSON);
 	} catch (e) {
 		const additionalInfo = {
