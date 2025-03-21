@@ -106,7 +106,7 @@ export const auth_token = async (request: Request, response: Response) => {
       </html>
     `;
 
-		response.send({ URL: htmlResponse, token: authResponse.body });
+		response.send(htmlResponse);
 	} catch (e) {
 		const additionalInfo = {
 			...errorArray,
