@@ -105,7 +105,8 @@ export const auth_token = async (request: Request, response: Response) => {
         </body>
       </html>
     `;
-		response.send(htmlResponse);
+
+		response.send({ URL: htmlResponse, token: authResponse.body });
 	} catch (e) {
 		const additionalInfo = {
 			...errorArray,
@@ -137,7 +138,7 @@ export const refresh_token = async (request: Request, response: Response) => {
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
 
-		Sentry.captureException(e); // Report error to Sentry
+		Sentry.captureException(e);
 		console.log('Failed to refresh token', 'controller=>quickbooks=>refresh_token', additionalInfo);
 	}
 };
