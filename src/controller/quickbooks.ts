@@ -48,8 +48,7 @@ export const auth_request = (request: Request, response: Response) => {
 		const additionalInfo = {
 			errorDetails: errorArray, // Include any collected error details
 			timestamp: new Date().toISOString(), // Add a timestamp
-			originalError: e instanceof Error ? e.message : 'Unknown error', // Original error message
-			stack: e instanceof Error ? e.stack : 'No stack trace available', // Include the stack trace if available
+			originalError: e instanceof Error ? e : 'Unknown error', // Original error message
 			functionContext: 'controller=>quickbooks=>auth_request', // Contextual information about where the error occurred
 		};
 
@@ -111,7 +110,7 @@ export const auth_token = async (request: Request, response: Response) => {
 	} catch (e) {
 		const additionalInfo = {
 			...errorArray,
-			originalError: e instanceof Error ? e.message : 'Unknown error',
+			originalError: e instanceof Error ? e : 'Unknown error',
 			timestamp: new Date().toISOString(),
 		};
 
