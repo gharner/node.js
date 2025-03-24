@@ -6,6 +6,7 @@ import { qbToken } from '../interfaces';
 import { admin, oauthClient } from '../middleware/';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
+import { logWithTime } from '../utilities';
 import Token from './Token';
 import { ensureValidToken } from './quickbooks.service';
 
@@ -162,7 +163,7 @@ export const refresh_token = async (request: Request, response: Response) => {
 		};
 
 		Sentry.captureException(e);
-		console.error('Failed to refresh token', additionalInfo);
+		logWithTime('Failed to refresh token', additionalInfo);
 	}
 };
 
@@ -171,15 +172,15 @@ export const refresh_token = async (request: Request, response: Response) => {
  *  Functions that fetch and update Quickbook data
  *
  *******************************************************************************************/
-export const get_updates = async (request: Request, response: Response) => {
+export const get_updates = async (request: Request, response: Response): Promise<void> => {
 	const errorArray: any[] = [];
 
 	try {
 		const token: qbToken = await ensureValidToken();
-		errorArray.push({ step: 'valid token fetched', token });
+		errorArray.push({ step: '✅ valid token fetched', token });
 
-		const lastUpdated = new Date(token.lastCustomerUpdate).toISOString().substring(0, 10);
-		errorArray.push({ step: 'last updated derived', lastUpdated });
+		const lastUpdated = new Date(token.lastCustomerUpdate ?? Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().substring(0, 10);
+		errorArray.push({ step: '📅 lastUpdated calculated', lastUpdated });
 
 		const query = `Select * from Customer where Metadata.LastUpdatedTime > '${lastUpdated}'`;
 
@@ -193,27 +194,41 @@ export const get_updates = async (request: Request, response: Response) => {
 			},
 		};
 
-		errorArray.push({ step: 'query config built', config });
+		errorArray.push({ step: '📦 query config built', config });
 
 		const result: AxiosResponse = await axios(config);
 		const customers = result.data.QueryResponse.Customer || [];
 
-		logger.log('Fetched customers:', customers);
+		logger.log('✅ Fetched customers:', customers);
 		response.send(customers);
-	} catch (e) {
+		return;
+	} catch (e: any) {
+		if (e.status === 401 && e.authUrl) {
+			logWithTime('🔐 Reauth required in get_updates', e);
+			response.status(401).send({
+				error: 'reauth_required',
+				authUrl: e.authUrl,
+			});
+			return;
+		}
+
 		const additionalInfo = {
 			errorArray,
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
 
-		Sentry.captureException(e); // Report error to Sentry
-		console.log('Failed to get_updates', 'controller=>quickbooks=>get_updates', additionalInfo);
-		response.status(500).send({ error: 'Failed to fetch customer updates', details: additionalInfo });
+		Sentry.captureException(e);
+		logWithTime('❌ controller=>quickbooks=>get_updates', additionalInfo);
+		response.status(500).send({
+			error: 'Failed to fetch customer updates',
+			details: additionalInfo,
+		});
+		return;
 	}
 };
 
-export const getCustomerByEmail = async (request: Request, response: Response) => {
+export const getCustomerByEmail = async (request: Request, response: Response): Promise<void> => {
 	const errorArray: any[] = [];
 
 	try {
@@ -224,7 +239,8 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 		const endpoint = request.headers.endpoint as string;
 
 		if (!email || !company || !endpoint) {
-			throw new Error('Missing required headers');
+			response.status(400).send({ error: 'Missing required headers' });
+			return;
 		}
 
 		const query = encodeURIComponent(`Select * from Customer where PrimaryEmailAddr = '${email}'`);
@@ -240,13 +256,23 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 			},
 		};
 
-		errorArray.push({ url, config });
+		errorArray.push({ step: '🔍 query setup', url, config });
 
 		const result: AxiosResponse = await axios(config);
-		errorArray.push(result.data.QueryResponse);
+		errorArray.push({ step: '✅ query result', data: result.data.QueryResponse });
 
 		response.send(result.data.QueryResponse);
-	} catch (e) {
+		return;
+	} catch (e: any) {
+		if (e.status === 401 && e.authUrl) {
+			logWithTime('🔐 Reauth required in getCustomerByEmail', e);
+			response.status(401).send({
+				error: 'reauth_required',
+				authUrl: e.authUrl,
+			});
+			return;
+		}
+
 		const additionalInfo = {
 			errorArray,
 			timestamp: new Date().toISOString(),
@@ -254,11 +280,12 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 		};
 
 		Sentry.captureException(e);
-		console.error('Failed to getCustomerByEmail', 'controller=>quickbooks=>getCustomerByEmail', additionalInfo);
+		logWithTime('❌ controller=>quickbooks=>getCustomerByEmail', additionalInfo);
 		response.status(400).send({
 			error: 'Failed to get customer by email',
 			details: additionalInfo,
 		});
+		return;
 	}
 };
 
@@ -267,7 +294,7 @@ export const validateToken = async (request: Request, response: Response) => {
 
 	try {
 		const tokenData: Token = new Token(request.body);
-		console.log('tokenData', tokenData);
+		logWithTime('tokenData', tokenData);
 		errorArray.push({ step: 'received token', tokenData });
 
 		if (!tokenData || !tokenData.access_token) {
