@@ -3,12 +3,11 @@ import axios, { AxiosResponse } from 'axios';
 import { Request, Response } from 'express';
 import { logger } from 'firebase-functions/v1';
 import { qbToken } from '../interfaces';
-import { admin } from '../middleware/firebase';
+import { admin, oauthClient } from '../middleware/';
 import qbDev from '../middleware/quickbooks.dev.json';
 import qbProd from '../middleware/quickbooks.prod.json';
-import { safeStringify } from '../utilities/common';
-import OAuthClient from './OAuthClient';
 import Token from './Token';
+import { ensureValidToken } from './quickbooks.service';
 
 // Initialize Sentry
 Sentry.init({
@@ -23,12 +22,6 @@ const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : 
  *  Functions require for authentication
  *
  *******************************************************************************************/
-const oauthClient = new OAuthClient({
-	clientId: config.client_id,
-	clientSecret: config.client_secret,
-	environment: config.state === 'development' ? 'sandbox' : 'production',
-	redirectUri: process.env.FUNCTIONS_EMULATOR ? `http://localhost:5001/${process.env.GCLOUD_PROJECT}/us-central1/qb/auth_token` : config.redirect_uri,
-});
 
 const isQbToken = (obj: any): obj is qbToken => {
 	return obj && typeof obj.access_token === 'string' && typeof obj.expires_in === 'number' && typeof obj.refresh_token === 'string' && typeof obj.x_refresh_token_expires_in === 'number';
@@ -61,7 +54,7 @@ export const auth_token = async (request: Request, response: Response) => {
 	const errorArray: any[] = [];
 
 	try {
-		errorArray.push({ step: 'initializing', oauthClient: oauthClient });
+		errorArray.push({ step: 'initializing', oauthClient });
 
 		const parseRedirect = request.url;
 		errorArray.push({ step: 'parsing redirect', parseRedirect });
@@ -73,25 +66,32 @@ export const auth_token = async (request: Request, response: Response) => {
 			throw new Error('Invalid token payload');
 		}
 
-		// Use a single starting point for all calculations.
-		const serverTime = Date.now();
-		authResponse.body.server_time = serverTime;
+		// ✅ Force use of current server time
+		const now = Date.now();
+		const accessLifespan = authResponse.body.expires_in ?? 3600; // fallback: 1h
+		const refreshLifespan = authResponse.body.x_refresh_token_expires_in ?? 86400; // fallback: 24h
 
-		// Calculate access token expiry using expires_in (in seconds).
-		const expiresDuration = authResponse.body.expires_in; // seconds
-		authResponse.body.expires_time = serverTime + expiresDuration * 1000;
-		console.log(authResponse.body.expires_time);
-
-		// Calculate refresh token expiry using x_refresh_token_expires_in (in seconds).
-		/* 		const refreshDuration = authResponse.body.x_refresh_token_expires_in; // seconds
-		authResponse.body.refresh_time = serverTime + refreshDuration * 1000; */
-		authResponse.body.refresh_time = serverTime + expiresDuration * 1000;
-		console.log(authResponse.body.refresh_time);
-
-		// If you need a separate refresh_expires_time, you can assign it the refresh_time
+		authResponse.body.server_time = now;
+		authResponse.body.expires_time = now + accessLifespan * 1000;
+		authResponse.body.refresh_time = now + refreshLifespan * 1000;
 		authResponse.body.refresh_expires_time = authResponse.body.refresh_time;
 
-		await admin.firestore().doc('mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
+		const ref = admin.firestore().doc('mas-parameters/quickbooksAPI');
+
+		const cleanToken = Object.entries(authResponse.body).reduce((acc, [key, value]) => {
+			if (value !== undefined) acc[key] = value;
+			return acc;
+		}, {} as Record<string, any>);
+
+		try {
+			await ref.update(cleanToken);
+		} catch (err: any) {
+			if (err.code === 5 || err.message?.includes('No document')) {
+				await ref.set(cleanToken, { merge: true });
+			} else {
+				throw err;
+			}
+		}
 
 		const htmlResponse = `
       <!DOCTYPE html>
@@ -114,7 +114,7 @@ export const auth_token = async (request: Request, response: Response) => {
 			timestamp: new Date().toISOString(),
 		};
 
-		Sentry.captureException(e); // Report error to Sentry
+		Sentry.captureException(e);
 		logger.error('Error in auth_token:', additionalInfo);
 	}
 };
@@ -122,32 +122,39 @@ export const auth_token = async (request: Request, response: Response) => {
 export const refresh_token = async (request: Request, response: Response) => {
 	try {
 		const refreshToken = <string>request.headers['refresh_token'];
-		if (!refreshToken) {
-			console.log('Missing refresh_token header');
-			throw new Error('Missing refresh_token header');
-		}
+		if (!refreshToken) throw new Error('Missing refresh_token header');
 
 		const authResponse = await oauthClient.refreshUsingToken(refreshToken);
-		const safeResponse = safeStringify(authResponse);
-		const safeResponseJSON = JSON.parse(safeResponse);
 
-		// ⏱️ Add timing fields just like in auth_token
-		const serverTime = Date.now();
-		authResponse.body.server_time = serverTime;
+		// ✅ Force use of current server time
+		const now = Date.now();
+		const accessLifespan = authResponse.body.expires_in ?? 3600;
+		const refreshLifespan = authResponse.body.x_refresh_token_expires_in ?? 86400;
 
-		const expiresDuration = authResponse.body.expires_in; // seconds
-		authResponse.body.expires_time = serverTime + expiresDuration * 1000;
-
-		const refreshDuration = authResponse.body.x_refresh_token_expires_in; // seconds
-		authResponse.body.refresh_time = serverTime + refreshDuration * 1000;
-
+		authResponse.body.server_time = now;
+		authResponse.body.expires_time = now + accessLifespan * 1000;
+		authResponse.body.refresh_time = now + refreshLifespan * 1000;
 		authResponse.body.refresh_expires_time = authResponse.body.refresh_time;
+		authResponse.body.status = 'idle';
 
-		// 🔥 Write to Firestore with the updated token
-		await admin.firestore().doc('/mas-parameters/quickbooksAPI').set(authResponse.body, { merge: true });
+		const ref = admin.firestore().doc('mas-parameters/quickbooksAPI');
 
-		// Return to client
-		response.send(safeResponseJSON);
+		const cleanToken = Object.entries(authResponse.body).reduce((acc, [key, value]) => {
+			if (value !== undefined) acc[key] = value;
+			return acc;
+		}, {} as Record<string, any>);
+
+		try {
+			await ref.update(cleanToken);
+		} catch (err: any) {
+			if (err.code === 5 || err.message?.includes('No document')) {
+				await ref.set(cleanToken, { merge: true });
+			} else {
+				throw err;
+			}
+		}
+
+		response.send(cleanToken);
 	} catch (e) {
 		const additionalInfo = {
 			timestamp: new Date().toISOString(),
@@ -155,7 +162,7 @@ export const refresh_token = async (request: Request, response: Response) => {
 		};
 
 		Sentry.captureException(e);
-		console.log('Failed to refresh token', 'controller=>quickbooks=>refresh_token', additionalInfo);
+		console.error('Failed to refresh token', additionalInfo);
 	}
 };
 
@@ -166,17 +173,13 @@ export const refresh_token = async (request: Request, response: Response) => {
  *******************************************************************************************/
 export const get_updates = async (request: Request, response: Response) => {
 	const errorArray: any[] = [];
+
 	try {
-		const doc = await admin.firestore().doc('/mas-parameters/quickbooksAPI').get();
-		const data = doc.data() as qbToken;
-		errorArray.push(data);
+		const token: qbToken = await ensureValidToken();
+		errorArray.push({ step: 'valid token fetched', token });
 
-		if (!data || !data.expires_time) {
-			response.status(400).send({ error: 'Invalid or expired token' });
-		}
-
-		const lastUpdated = new Date(data.lastCustomerUpdate).toISOString().substring(0, 10);
-		errorArray.push(lastUpdated);
+		const lastUpdated = new Date(token.lastCustomerUpdate).toISOString().substring(0, 10);
+		errorArray.push({ step: 'last updated derived', lastUpdated });
 
 		const query = `Select * from Customer where Metadata.LastUpdatedTime > '${lastUpdated}'`;
 
@@ -186,16 +189,17 @@ export const get_updates = async (request: Request, response: Response) => {
 			headers: {
 				Accept: 'application/json',
 				'Content-Type': 'application/json',
-				Authorization: `Bearer ${request.headers.token}`,
+				Authorization: `Bearer ${token.access_token}`,
 			},
 		};
-		errorArray.push(config);
+
+		errorArray.push({ step: 'query config built', config });
 
 		const result: AxiosResponse = await axios(config);
-		errorArray.push(result.data.QueryResponse.Customer);
-		logger.log(result.data.QueryResponse.Customer);
+		const customers = result.data.QueryResponse.Customer || [];
 
-		response.send(result.data.QueryResponse.Customer);
+		logger.log('Fetched customers:', customers);
+		response.send(customers);
 	} catch (e) {
 		const additionalInfo = {
 			errorArray,
@@ -205,25 +209,38 @@ export const get_updates = async (request: Request, response: Response) => {
 
 		Sentry.captureException(e); // Report error to Sentry
 		console.log('Failed to get_updates', 'controller=>quickbooks=>get_updates', additionalInfo);
+		response.status(500).send({ error: 'Failed to fetch customer updates', details: additionalInfo });
 	}
 };
 
 export const getCustomerByEmail = async (request: Request, response: Response) => {
 	const errorArray: any[] = [];
+
 	try {
-		const query = `Select * from Customer where PrimaryEmailAddr = '${request.headers.email}'`;
-		errorArray.push(query);
+		const token = await ensureValidToken();
+
+		const email = request.headers.email as string;
+		const company = request.headers.company as string;
+		const endpoint = request.headers.endpoint as string;
+
+		if (!email || !company || !endpoint) {
+			throw new Error('Missing required headers');
+		}
+
+		const query = encodeURIComponent(`Select * from Customer where PrimaryEmailAddr = '${email}'`);
+		const url = `https://${endpoint}/v3/company/${company}/query?query=${query}`;
 
 		const config = {
 			method: 'get',
-			url: `https://${request.headers.endpoint}/v3/company/${request.headers.company}/query?query=${query}`,
+			url,
 			headers: {
 				Accept: 'application/json',
-				'Content-Type': 'application/text',
-				Authorization: `Bearer ${request.headers.token}`,
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${token.access_token}`,
 			},
 		};
-		errorArray.push(config);
+
+		errorArray.push({ url, config });
 
 		const result: AxiosResponse = await axios(config);
 		errorArray.push(result.data.QueryResponse);
@@ -236,8 +253,12 @@ export const getCustomerByEmail = async (request: Request, response: Response) =
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
 
-		Sentry.captureException(e); // Report error to Sentry
-		console.log('Failed to getCustomerByEmail', 'controller=>quickbooks=>getCustomerByEmail', additionalInfo);
+		Sentry.captureException(e);
+		console.error('Failed to getCustomerByEmail', 'controller=>quickbooks=>getCustomerByEmail', additionalInfo);
+		response.status(400).send({
+			error: 'Failed to get customer by email',
+			details: additionalInfo,
+		});
 	}
 };
 

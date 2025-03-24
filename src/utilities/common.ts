@@ -1,7 +1,7 @@
-import { admin } from '../middleware/firebase';
+import { Response } from 'express';
 import * as functions from 'firebase-functions';
 import { EmailMessage } from '../interfaces/common';
-import { Response } from 'express';
+import { admin } from '../middleware/firebase';
 
 const logger = functions.logger;
 
@@ -106,5 +106,18 @@ export class CustomError extends Error {
 		super(message);
 		this.name = this.constructor.name;
 		Error.captureStackTrace(this, this.constructor);
+	}
+}
+
+export function logWithTime(label: string, value?: any) {
+	const logDate = new Date().toLocaleString('en-US', {
+		timeZone: 'America/New_York',
+		hour12: false,
+	});
+
+	if (value !== undefined) {
+		console.log(`${logDate} - ${label}`, value);
+	} else {
+		console.log(`${logDate} - ${label}`);
 	}
 }
