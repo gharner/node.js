@@ -17,11 +17,11 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
 		}
 
 		res.status(500).json({ error: err.serializeError() });
-		return; // ✅ Ensures this branch returns
+		return;
 	}
 
 	// Handle unknown errors
 	logWithTime('UnhandledError', err);
 	res.status(500).json({ error: { message: 'Internal Server Error' } });
-	return; // ✅ Covers the fallback path
+	return;
 }
