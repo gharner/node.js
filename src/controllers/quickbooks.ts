@@ -2,13 +2,11 @@ import * as Sentry from '@sentry/node'; // Added Sentry import
 import axios, { AxiosResponse } from 'axios';
 import { Request, Response } from 'express';
 import { logger } from 'firebase-functions/v1';
+import { quickbooksDev, quickbooksProd } from '../configs';
 import { qbToken } from '../interfaces';
-import { admin, oauthClient } from '../middleware/';
-import qbDev from '../middleware/quickbooks.dev.json';
-import qbProd from '../middleware/quickbooks.prod.json';
-import { logWithTime } from '../utilities';
-import Token from './Token';
-import { ensureValidToken } from './quickbooks.service';
+import { admin, logWithTime, oauthClient } from '../modules';
+import Token from '../modules/Token.module';
+import { ensureValidToken } from '../modules/quickbooks.module';
 
 // Initialize Sentry
 Sentry.init({
@@ -16,7 +14,7 @@ Sentry.init({
 	environment: process.env.NODE_ENV || 'development',
 });
 
-const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? qbDev : qbProd;
+const config = process.env.GCLOUD_PROJECT === 'mas-development-53ac7' ? quickbooksDev : quickbooksProd;
 
 /*******************************************************************************************
  *

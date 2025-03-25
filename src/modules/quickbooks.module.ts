@@ -1,7 +1,6 @@
+import { admin, logWithTime, oauthClient } from '.';
 import { qbToken } from '../interfaces';
-import { admin, oauthClient } from '../middleware/';
-import { logWithTime } from '../utilities';
-import Token from './Token';
+import Token from './Token.module';
 
 export async function ensureValidToken(): Promise<qbToken> {
 	logWithTime('🔐 ensureValidToken() called');

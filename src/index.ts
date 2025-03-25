@@ -2,10 +2,9 @@ import * as Sentry from '@sentry/google-cloud-serverless';
 import Express from 'express';
 import * as functions from 'firebase-functions/v1';
 import path from 'path';
-import { violationsJob } from './controller/attendanceViolations';
-import { dailyJobs } from './controller/gizmo';
+import { dailyJobs, violationsJob } from './controllers';
 import { IRoutes } from './interfaces';
-import { cors } from './middleware/cors';
+import { cors, errorHandler } from './middleware';
 import { routes } from './routes';
 
 // Initialize Sentry for error tracking
@@ -50,6 +49,9 @@ routes.forEach((routerObj: IRoutes) => {
 	app.all('*', (req, res) => {
 		res.status(404).json({ error: 'Route not found' });
 	});
+
+	// ✅ Use your custom error-handling middleware
+	app.use(errorHandler);
 
 	// Handle errors and report them to Sentry
 	exports[routerObj.name] = functions.https.onRequest(async (req, res) => {

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { accessToken, addMember, directory, events, googleLogin, group, members, oAuthCallback, removeMember, createSharedContact, removeSharedContact } from '../controller';
+import { accessToken, addMember, createSharedContact, directory, events, googleLogin, group, members, oAuthCallback, removeMember, removeSharedContact } from '../controllers';
 import { IRoutes } from '../interfaces';
 
 const router = Router();

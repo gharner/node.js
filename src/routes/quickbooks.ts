@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { auth_request, auth_token, get_updates, getCustomerByEmail, refresh_token, validateToken } from '../controller';
+import { auth_request, auth_token, get_updates, getCustomerByEmail, refresh_token, validateToken } from '../controllers';
 import { IRoutes } from '../interfaces';
 
 const router = Router();

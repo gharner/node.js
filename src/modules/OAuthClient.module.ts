@@ -7,8 +7,8 @@ import os from 'os';
 import path from 'path';
 import getPem from 'rsa-pem-from-mod-exp';
 import winston from 'winston';
-import AuthResponse from './AuthResponse';
-import Token from './Token';
+import AuthResponse from './AuthResponse.module';
+import Token from './Token.module';
 
 export interface OAuthClientConfig {
 	environment: string;

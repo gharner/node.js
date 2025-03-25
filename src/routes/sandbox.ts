@@ -1,6 +1,6 @@
-import { space_station, getFirecloudDocuments, htmlExample, testErrorHandler } from '../controller';
-import { IRoutes } from '../interfaces';
 import { Router } from 'express';
+import { getFirecloudDocuments, htmlExample, space_station, testErrorHandler } from '../controllers';
+import { IRoutes } from '../interfaces';
 
 const router = Router();
 

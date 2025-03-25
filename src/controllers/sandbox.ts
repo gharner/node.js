@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import * as functions from 'firebase-functions/v1';
-import { admin } from '../middleware/firebase';
-import { CustomError, handleError } from '../utilities/common';
+import { CustomError, logWithTime } from '../modules';
+import { admin } from '../modules/firebase.module';
 
 const logger = functions.logger;
 //const firestore = functions.firestore;
@@ -27,10 +27,9 @@ export const space_station = (request: Request, response: Response) => {
 				originalError: e instanceof Error ? e.message : 'Unknown error',
 			};
 
-			logger.error('Error in space_station:', additionalInfo);
+			logWithTime('Error in space_station:', additionalInfo);
 
-			const customError = new CustomError('Failed to space_station', 'controller=>sandbox=>space_station', additionalInfo);
-			handleError(customError, response);
+			throw new CustomError('Failed to space_station', 'controller=>sandbox=>space_station', additionalInfo);
 		});
 };
 export const getFirecloudDocuments = async (request: Request, response: Response) => {
@@ -47,8 +46,7 @@ export const getFirecloudDocuments = async (request: Request, response: Response
 
 		logger.error('Error in getFirecloudDocuments:', additionalInfo);
 
-		const customError = new CustomError('Failed to getFirecloudDocuments', 'controller=>sandbox=>getFirecloudDocuments', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to getFirecloudDocuments', 'controller=>sandbox=>getFirecloudDocuments', additionalInfo);
 	}
 };
 
@@ -83,7 +81,6 @@ export const testErrorHandler = (request: Request, response: Response) => {
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
-		const customError = new CustomError('Failed sendNotification', 'controller=>sandbox=>testErrorHandler', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed sendNotification', 'controller=>sandbox=>testErrorHandler', additionalInfo);
 	}
 };

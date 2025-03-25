@@ -1,7 +1,7 @@
 import * as Sentry from '@sentry/google-cloud-serverless';
 import moment from 'moment-timezone';
 import { AttendanceViolation, Program, Schedule } from '../interfaces';
-import { admin } from '../middleware/firebase';
+import { admin } from '../modules/firebase.module';
 
 export interface EmailMessage {
 	to: string;

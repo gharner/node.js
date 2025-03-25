@@ -1,11 +1,10 @@
 import axios, { AxiosResponse } from 'axios';
 import { Request, Response } from 'express';
-import { admin } from '../middleware/firebase';
+import { logger } from 'firebase-functions';
+import { GaxiosResponse } from 'gaxios';
 import { google } from 'googleapis';
 import { xml2json } from 'xml-js';
-import { GaxiosResponse } from 'gaxios';
-import { logger } from 'firebase-functions';
-import { CustomError, handleError } from '../utilities/common';
+import { admin, CustomError } from '../modules';
 
 // Using GAPI authorization URL get token information and store it in Firecloud
 export const accessToken = async (request: Request, response: Response) => {
@@ -56,8 +55,7 @@ export const accessToken = async (request: Request, response: Response) => {
 		logger.error('Error getting accessToken:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed to get accessToken', 'controller=>gapi=>accessToken', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to get accessToken', 'controller=>gapi=>accessToken', additionalInfo);
 	}
 };
 
@@ -96,8 +94,7 @@ export const addGroup = async (request: Request, response: Response) => {
 		logger.error('Error addGroup:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed addGroup', 'controller=>gapi=>addGroup', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed addGroup', 'controller=>gapi=>addGroup', additionalInfo);
 	}
 };
 
@@ -139,8 +136,7 @@ export const addMember = async (request: Request, response: Response) => {
 		logger.error('Error addMember:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed addMember', 'controller=>gapi=>addMember', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed addMember', 'controller=>gapi=>addMember', additionalInfo);
 	}
 };
 
@@ -169,8 +165,7 @@ export const directory = async (request: Request, response: Response) => {
 		logger.error('Error getting directory:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed to get directory', 'controller=>gapi=>directory', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to get directory', 'controller=>gapi=>directory', additionalInfo);
 	}
 };
 
@@ -206,8 +201,7 @@ export const events = async (request: Request, response: Response) => {
 		logger.error('Error getting events:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed to get events', 'controller=>gapi=>events', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to get events', 'controller=>gapi=>events', additionalInfo);
 	}
 };
 
@@ -258,8 +252,7 @@ export const group = async (request: Request, response: Response) => {
 		logger.error('Error getting group:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed to get group', 'controller=>gapi=>group', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to get group', 'controller=>gapi=>group', additionalInfo);
 	}
 };
 
@@ -305,8 +298,7 @@ export const members = async (request: Request, response: Response) => {
 		logger.error('Error getting members:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed to get members', 'controller=>gapi=>members', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to get members', 'controller=>gapi=>members', additionalInfo);
 	}
 };
 
@@ -368,8 +360,7 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 		logger.error('Error oAuthCallback:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed oAuthCallback', 'controller=>gapi=>oAuthCallback', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed oAuthCallback', 'controller=>gapi=>oAuthCallback', additionalInfo);
 	}
 };
 
@@ -402,8 +393,7 @@ export const removeMember = async (request: Request, response: Response) => {
 		logger.error('Error removing member:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed to remove member', 'controller=>gapi=>removeMember', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to remove member', 'controller=>gapi=>removeMember', additionalInfo);
 	}
 };
 
@@ -448,8 +438,7 @@ export const createSharedContact = async (request: Request, response: Response) 
 		logger.error('Error creating shared contact:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed to create shared contact', 'controller=>gapi=>createSharedContact', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to create shared contact', 'controller=>gapi=>createSharedContact', additionalInfo);
 	}
 };
 
@@ -480,7 +469,6 @@ export const removeSharedContact = async (request: Request, response: Response) 
 		logger.error('Error removing shared contact:', additionalInfo);
 
 		// Throw the CustomError with additional information
-		const customError = new CustomError('Failed to remove shared contact', 'controller=>gapi=>removeSharedContact', additionalInfo);
-		handleError(customError, response);
+		throw new CustomError('Failed to remove shared contact', 'controller=>gapi=>removeSharedContact', additionalInfo);
 	}
 };
