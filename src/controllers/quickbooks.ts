@@ -26,6 +26,12 @@ const isQbToken = (obj: any): obj is qbToken => {
 	return obj && typeof obj.access_token === 'string' && typeof obj.expires_in === 'number' && typeof obj.refresh_token === 'string' && typeof obj.x_refresh_token_expires_in === 'number';
 };
 
+/*******************************************************************************************
+ *
+ *  This function initiates an authorization request if no token is availble or if the
+ *  token is invalid.
+ *  ! THIS IS CURRENTLY UNUSED. ensureValidToken() is used to automate token management
+ *******************************************************************************************/
 export const auth_request = (request: Request, response: Response) => {
 	const errorArray: any[] = [];
 	try {
@@ -38,10 +44,10 @@ export const auth_request = (request: Request, response: Response) => {
 		response.send(auth_url);
 	} catch (e) {
 		const additionalInfo = {
-			errorDetails: errorArray, // Include any collected error details
-			timestamp: new Date().toISOString(), // Add a timestamp
-			originalError: e instanceof Error ? e : 'Unknown error', // Original error message
-			functionContext: 'controller=>quickbooks=>auth_request', // Contextual information about where the error occurred
+			errorDetails: errorArray,
+			timestamp: new Date().toISOString(),
+			originalError: e instanceof Error ? e : 'Unknown error',
+			functionContext: 'controller=>quickbooks=>auth_request',
 		};
 
 		Sentry.captureException(e); // Report error to Sentry
