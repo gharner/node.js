@@ -90,7 +90,7 @@ export const scheduledSaturdayFunction = functions.pubsub.schedule('0 1 * * 6').
 	})
 );
 
-export const scheduledViolationsJob = functions.pubsub.schedule('0 9 * * 1-7').onRun(
+export const scheduledViolationsJob = functions.pubsub.schedule('0 16,17,18,19,20,21 * * 1-6').onRun(
 	wrapWithSentry(async () => {
 		if (process.env.GCLOUD_PROJECT === 'valiant-splicer-224515') {
 			await violationsJob();

@@ -191,7 +191,7 @@ async function addViolationEmail(violation: AttendanceViolation) {
 		const emailBody = `${violation.name} was scheduled to attend a ${violation.summary} class on ${violation.endDate} but did not show.`;
 
 		const email = {
-			to: 'gh@yongsa.net',
+			to: ['gh@yongsa.net', 'rachel.harner@yongsa.net', 'tara.harner@yongsa.net'],
 			message: {
 				subject: 'Attendance Violation',
 				text: emailBody,
