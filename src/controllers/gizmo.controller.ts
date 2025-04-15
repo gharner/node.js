@@ -1,5 +1,6 @@
 import { EmailMessage, Schedule } from '../interfaces';
 import { admin, CustomError } from '../modules';
+
 export const dailyJobs = async () => {
 	await getSchedules().catch(e => {
 		const additionalInfo = {
@@ -9,6 +10,7 @@ export const dailyJobs = async () => {
 		throw new CustomError('Failed dailyJobs', 'controller=>gizmo=>dailyJobs', additionalInfo);
 	});
 };
+
 async function getSchedules() {
 	const today = new Date();
 	today.setHours(today.getHours() - 4);
@@ -17,15 +19,14 @@ async function getSchedules() {
 	tomorrow.setDate(tomorrow.getDate() + 1);
 
 	const from = today.toISOString().slice(0, 10);
-
 	const to = tomorrow.toISOString().slice(0, 10);
 
 	try {
 		const snapshot = await admin.firestore().collection('mas-schedules').where('start.dateTime', '>', from).where('start.dateTime', '<', to).get();
+
 		const data = snapshot.docs.map(doc => doc.data()) as Schedule[];
 		processSchedules(data);
 	} catch (e) {
-		// Capture additional information
 		const additionalInfo = {
 			timestamp: new Date().toISOString(),
 			originalError: e instanceof Error ? e.message : 'Unknown error',
@@ -37,24 +38,13 @@ async function getSchedules() {
 
 async function processSchedules(schedules: Schedule[]) {
 	for (const schedule of schedules) {
-		const notificationArray =
-			schedule.attendance
-				?.map(m => {
-					if (m.notifications) {
-						return m.notifications;
-					}
-					return null; // Return null instead of undefined
-				})
-				.filter(n => n !== null) ?? []; // Filter out null values
+		const notificationArray = schedule.attendance?.map(m => m.notifications ?? null).filter(n => n !== null) ?? [];
 
 		try {
-			if (notificationArray.length === 0) {
-				continue;
-			}
+			if (notificationArray.length === 0) continue;
 
 			const uniqueNotifications = getUniqueNotifications(notificationArray);
 
-			// Log the uniqueNotifications array for debugging
 			console.log('Unique Notifications:', uniqueNotifications);
 
 			const groupEmail = uniqueNotifications
@@ -63,20 +53,18 @@ async function processSchedules(schedules: Schedule[]) {
 				.join();
 
 			if (groupEmail) {
-				await sendNotification('mas-email', 'accounts@yongsa.net', groupEmail, schedule);
+				await sendNotification('mas-email', 'accounts@yongsa.net', groupEmail, '', schedule);
 			}
 
 			for (const notify of uniqueNotifications.filter((f: { phone: string }) => f.phone)) {
-				await sendNotification('mas-twilio', notify.phone, '', schedule);
+				await sendNotification('mas-twilio', notify.phone, '', '', schedule);
 			}
 		} catch (e) {
-			// Capture additional information
 			const additionalInfo = {
 				timestamp: new Date().toISOString(),
 				originalError: e instanceof Error ? e.message : 'Unknown error',
 			};
 
-			// Throw the CustomError with additional information
 			throw new CustomError('Failed processSchedules', 'controller=>gizmo=>processSchedules', additionalInfo);
 		}
 	}
@@ -92,14 +80,24 @@ function getUniqueNotifications(notifications: any[]) {
 	});
 }
 
-async function sendNotification(collection: string, to: string, bcc: string, schedule: Schedule) {
+async function sendNotification(collection: string, to: string, bcc: string | string[], cc: string | string[], schedule: Schedule) {
 	const startDate = dateLocalString(schedule.start.dateTime);
 	let message: EmailMessage | { to: string; body: string };
 
+	const normalizeEmailField = (input: string | string[] | undefined): string[] | undefined => {
+		if (!input) return undefined;
+		if (Array.isArray(input)) return input;
+		return input
+			.split(',')
+			.map(s => s.trim())
+			.filter(Boolean);
+	};
+
 	if (collection === 'mas-email') {
 		message = {
-			to: to,
-			bcc: bcc,
+			to,
+			bcc: normalizeEmailField(bcc),
+			cc: normalizeEmailField(cc),
 			message: {
 				subject: `${schedule.summary} class reservation reminder`,
 				text: `You have a reservation for the ${schedule.summary} class at ${startDate}.`,

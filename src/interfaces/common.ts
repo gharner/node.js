@@ -1,6 +1,6 @@
 export interface EmailMessage {
-	to: string;
-	cc?: string;
-	bcc?: string;
+	to: string | string[];
+	cc?: string | string[];
+	bcc?: string | string[];
 	message: { subject: string; text?: string; html?: string };
 }
