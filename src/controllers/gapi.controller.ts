@@ -303,10 +303,10 @@ export const members = async (request: Request, response: Response) => {
 };
 
 // Handles to redirect url callback
+// Handles to redirect url callback
 export const oAuthCallback = async (request: Request, response: Response) => {
 	const { query: { error, code } = {} } = request;
 
-	// User may deny access to the application.
 	if (error) {
 		response.status(500).send(error);
 		return;
@@ -316,50 +316,61 @@ export const oAuthCallback = async (request: Request, response: Response) => {
 
 	const oAuth2Client = new google.auth.OAuth2(process.env.CLIENT_ID, process.env.CLIENT_SECRET, REDIRECT);
 
-	// Exchange the authorization code for an access token.
-	const { tokens } = await oAuth2Client.getToken(<string>code);
-
-	oAuth2Client.setCredentials(tokens);
-
-	const oauth2 = google.oauth2({
-		auth: oAuth2Client,
-		version: 'v2',
-	});
-
-	// Get the user's email address and Google user ID
-	const { data } = await oauth2.userinfo.get();
-	const { email } = data;
-
-	// Store the refresh token in the Firestore database.
-	const accountByEmail = admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', email).get();
-
-	const accountData = (await accountByEmail).docs.pop()?.data();
-
-	if (process.env.FUNCTIONS_EMULATOR) {
-		logger.log(accountData);
-	}
-
-	const account = accountData?.id;
-
 	try {
-		const accountsCollection = admin.firestore().collection('mas-accounts');
+		const { tokens } = await oAuth2Client.getToken(<string>code);
+		oAuth2Client.setCredentials(tokens);
 
-		// Set merge: true to not overwrite any other data in the same document
-		await accountsCollection.doc(<string>account).set({ mas: { gapi: { user: data, token: tokens } } }, { merge: true });
+		const oauth2 = google.oauth2({
+			auth: oAuth2Client,
+			version: 'v2',
+		});
 
-		const html_response = '<!DOCTYPE html><html lang="en"><head><title>Google Token Response</title><script>window.close();</script></head><body><h4>New Token Issued</h4></body></html>';
+		const { data } = await oauth2.userinfo.get();
+		const { email } = data;
+
+		if (!email) {
+			throw new CustomError('Missing email from userinfo', 'controller=>gapi=>oAuthCallback', { data });
+		}
+
+		const snapshot = await admin.firestore().collection('mas-accounts').where('emailAddresses.value', '==', email).get();
+
+		const accountData = snapshot.docs.pop()?.data();
+		const account = accountData?.id;
+
+		if (!account) {
+			throw new CustomError('No matching mas-account found for email', 'controller=>gapi=>oAuthCallback', { email });
+		}
+
+		await admin
+			.firestore()
+			.collection('mas-accounts')
+			.doc(account)
+			.set({ mas: { gapi: { user: data, token: tokens } } }, { merge: true });
+
+		const html_response = `
+			<!DOCTYPE html>
+			<html lang="en">
+			<head>
+				<title>Google Token Response</title>
+				<script>window.close();</script>
+			</head>
+			<body>
+				<h4>New Token Issued</h4>
+			</body>
+			</html>`;
+
 		response.send(html_response);
 	} catch (e) {
-		// Capture additional information
 		const additionalInfo = {
 			timestamp: new Date().toISOString(),
+			code,
 			originalError: e instanceof Error ? e.message : 'Unknown error',
 		};
 
-		// Log the error before throwing it as a CustomError
 		logger.error('Error oAuthCallback:', additionalInfo);
+		response.status(500).send('OAuth callback failed');
 
-		// Throw the CustomError with additional information
+		// Optional: also throw for function logging if you're capturing upstream
 		throw new CustomError('Failed oAuthCallback', 'controller=>gapi=>oAuthCallback', additionalInfo);
 	}
 };
