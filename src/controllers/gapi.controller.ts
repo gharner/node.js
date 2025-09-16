@@ -181,7 +181,7 @@ export const events = async (request: Request, response: Response) => {
 			params: {
 				maxResults: 2500,
 				singleEvents: true,
-				q: filter?.toString().replace(' ', '%20'),
+				q: filter,
 				timeMin: start,
 			},
 			headers: {
