@@ -1,42 +1,14 @@
 import * as Sentry from '@sentry/google-cloud-serverless';
-import * as dotenv from 'dotenv';
 import Express from 'express';
 import * as functions from 'firebase-functions/v1';
-import fs from 'fs';
 import path from 'path';
-
 import { dailyJobs, violationsJob } from './controllers';
 import { IRoutes } from './interfaces';
 import { cors, errorHandler } from './middleware';
 import { routes } from './routes';
 
-/**
- * Load local env files for emulator/dev only.
- * In production, use real environment variables or Firebase runtime config/secrets.
- */
-(function loadLocalEnv() {
-	// Firebase emulator sets this
-	const isEmulator = !!process.env.FUNCTIONS_EMULATOR;
-
-	if (!isEmulator) return;
-
-	// Allow forcing a specific env file: ENV_FILE=.env.gregharner
-	const forcedEnvFile = process.env.ENV_FILE?.trim();
-
-	const candidates = forcedEnvFile ? [forcedEnvFile] : ['.env.dev', '.env.gregharner', '.env'];
-
-	for (const file of candidates) {
-		const fullPath = path.resolve(process.cwd(), file);
-		if (fs.existsSync(fullPath)) {
-			dotenv.config({ path: fullPath });
-			console.log(`Loaded environment file: ${file}`);
-			break;
-		}
-	}
-})();
-
 // Initialize Sentry for error tracking
-const isProd = process.env.GCLOUD_PROJECT === 'valiant-splicer-224515';
+const isProd = process.env.GCLOUD_PROJECT === '"valiant-splicer-224515"';
 
 Sentry.init({
 	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
@@ -71,10 +43,6 @@ routes.forEach((routerObj: IRoutes) => {
 	app.use(cors);
 	app.set('views', path.join(__dirname, 'views'));
 	app.set('view engine', 'ejs');
-
-	// Body parsers (needed for Twilio webhooks + any JSON payloads)
-	app.use(Express.json({ limit: '1mb' }));
-	app.use(Express.urlencoded({ extended: false }));
 	app.use(routerObj.router);
 
 	// Catch-all route for unmatched paths
@@ -107,7 +75,7 @@ export const scheduledFunction = functions.pubsub.schedule('0 9 * * 1-5').onRun(
 		if (process.env.GCLOUD_PROJECT === 'valiant-splicer-224515') {
 			await dailyJobs();
 		}
-	}),
+	})
 );
 
 /**
@@ -119,7 +87,7 @@ export const scheduledSaturdayFunction = functions.pubsub.schedule('0 1 * * 6').
 		if (process.env.GCLOUD_PROJECT === 'valiant-splicer-224515') {
 			await dailyJobs();
 		}
-	}),
+	})
 );
 
 export const scheduledViolationsJob = functions.pubsub.schedule('0 16,17,18,19,20,21 * * 1-6').onRun(
@@ -127,7 +95,7 @@ export const scheduledViolationsJob = functions.pubsub.schedule('0 16,17,18,19,2
 		if (process.env.GCLOUD_PROJECT === 'valiant-splicer-224515') {
 			await violationsJob();
 		}
-	}),
+	})
 );
 
 /**
@@ -138,19 +106,10 @@ export const currentEnvironment = functions.https.onRequest(async (request, resp
 	try {
 		cors(request, response, () => {
 			// List of environment variables to exclude from the response
-			const keysToExclude: string[] = [
-				'CLIENT_SECRET',
-				'DATABASE_PASSWORD',
-				'API_KEY',
-				'CLIENT_ID',
-
-				// ✅ Add Twilio secrets
-				'TWILIO_AUTH_TOKEN',
-				'TWILIO_ACCOUNT_SID',
-			];
+			const keysToExclude: string[] = ['CLIENT_SECRET', 'DATABASE_PASSWORD', 'API_KEY', 'CLIENT_ID'];
 
 			// Filter environment variables, excluding sensitive keys
-			const envVars: { [key: string]: string | undefined } = Object.keys(process.env).reduce<{ [key: string]: string | undefined }>((acc, key) => {
+			let envVars: { [key: string]: string | undefined } = Object.keys(process.env).reduce<{ [key: string]: string | undefined }>((acc, key) => {
 				if (!keysToExclude.includes(key)) {
 					acc[key] = process.env[key];
 				}
@@ -164,3 +123,17 @@ export const currentEnvironment = functions.https.onRequest(async (request, resp
 		response.status(500).send('Internal Server Error');
 	}
 });
+
+/**
+ * Example Express app with EJS rendering.
+ * This is commented out but can be enabled if needed for serving views.
+ */
+// const mainapp = Express();
+// mainapp.set('view engine', 'ejs');
+// mainapp.set('views', path.join(__dirname, 'views'));
+
+// mainapp.get('/example', (req, res) => {
+//   res.render('index', { title: 'Home Page' });
+// });
+
+// exports.mainapp = functions.https.onRequest(mainapp);

@@ -2,5 +2,4 @@ import { IRoutes } from '../interfaces';
 import { gapi } from './gapi';
 import { qb } from './quickbooks';
 import { sandbox } from './sandbox';
-import { twilio } from './twilio';
-export const routes: IRoutes[] = [gapi, qb, sandbox, twilio];
+export const routes: IRoutes[] = [gapi, qb, sandbox];
