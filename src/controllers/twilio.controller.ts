@@ -1,6 +1,7 @@
-import crypto from 'crypto';
 import { Request, Response } from 'express';
+import * as functions from 'firebase-functions/v1';
 import { logger } from 'firebase-functions/v1';
+import twilio from 'twilio';
 import { admin, CustomError, logWithTime, safeStringify } from '../modules';
 
 type TwilioInboundPayload = {
@@ -16,6 +17,12 @@ type TwilioInboundPayload = {
 const STOP_KEYWORDS = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit']);
 const START_KEYWORDS = new Set(['start', 'yes', 'unstop']);
 
+/**
+ * If you want signature validation while testing locally, set:
+ * TWILIO_VALIDATE_SIGNATURE_IN_EMULATOR=true
+ */
+const SHOULD_VALIDATE_SIGNATURE_IN_EMULATOR = (process.env.TWILIO_VALIDATE_SIGNATURE_IN_EMULATOR || '').toLowerCase() === 'true';
+
 export const inboundSmsWebhook = async (request: Request, response: Response) => {
 	try {
 		if (request.method !== 'POST') {
@@ -26,30 +33,34 @@ export const inboundSmsWebhook = async (request: Request, response: Response) =>
 		// Twilio posts application/x-www-form-urlencoded. With Express urlencoded enabled, this will be an object.
 		const payload: TwilioInboundPayload = (request.body ?? {}) as TwilioInboundPayload;
 
-		// Optional signature validation (recommended in production)
-		const authToken = process.env.TWILIO_AUTH_TOKEN;
+		// Signature validation (recommended in production)
+		const authToken = getTwilioAuthToken();
 		const signature = (request.header('X-Twilio-Signature') || '').trim();
 
-		if (authToken && signature) {
-			const url = getPublicUrl(request);
-			const isValid = validateTwilioSignature(authToken, signature, url, payload);
-			if (!isValid) {
-				logger.warn('Invalid Twilio signature', { url });
-				response.status(403).send('Forbidden');
-				return;
+		const isEmulator = !!process.env.FUNCTIONS_EMULATOR;
+		const shouldValidateSignature = !isEmulator || SHOULD_VALIDATE_SIGNATURE_IN_EMULATOR;
+
+		if (shouldValidateSignature) {
+			if (!authToken) {
+				logger.warn('TWILIO_AUTH_TOKEN is missing. Skipping signature validation.');
+			} else if (!signature) {
+				logger.warn('X-Twilio-Signature header is missing. Skipping signature validation.');
+			} else {
+				const url = getPublicUrl(request);
+				const isValid = validateTwilioSignature(authToken, signature, url, payload);
+				if (!isValid) {
+					logger.warn('Invalid Twilio signature', { url });
+					response.status(403).send('Forbidden');
+					return;
+				}
 			}
-		} else {
-			// If you haven't set TWILIO_AUTH_TOKEN yet, you can still run the webhook,
-			// but signature validation will be skipped.
-			if (process.env.FUNCTIONS_EMULATOR) {
-				logger.log('Twilio signature validation skipped (missing TWILIO_AUTH_TOKEN or signature header).');
-			}
+		} else if (isEmulator) {
+			logger.log('Twilio signature validation skipped in emulator.');
 		}
 
 		const from = (payload.From || '').trim();
 		const to = (payload.To || '').trim();
-		const bodyRaw = (payload.Body || '').toString();
-		const body = bodyRaw.trim();
+		const body = (payload.Body ?? '').toString().trim();
 		const normalized = body.toLowerCase();
 
 		if (!from) {
@@ -57,25 +68,28 @@ export const inboundSmsWebhook = async (request: Request, response: Response) =>
 			return;
 		}
 
-		if (process.env.FUNCTIONS_EMULATOR) {
+		if (isEmulator) {
 			logger.log(`twilio inbound from=${from} to=${to} body=${body}`);
 			logger.log(`payload=${safeStringify(payload, 2)}`);
 		}
 
-		// Always store inbound message (optional but useful for audit/debugging)
-		await admin
-			.firestore()
-			.collection('sms_inbound')
-			.add({
+		// Always store inbound message (use MessageSid as doc id when available to avoid duplicates)
+		const inboundRef = payload.MessageSid ? admin.firestore().collection('sms_inbound').doc(payload.MessageSid) : admin.firestore().collection('sms_inbound').doc();
+
+		await inboundRef.set(
+			{
 				from,
 				to,
 				body,
 				normalized,
 				smsSid: payload.SmsSid || null,
 				messageSid: payload.MessageSid || null,
+				numMedia: payload.NumMedia || null,
 				raw: payload,
 				createdAt: admin.firestore.FieldValue.serverTimestamp(),
-			});
+			},
+			{ merge: true },
+		);
 
 		// Record STOP / START style keywords for your own visibility
 		if (STOP_KEYWORDS.has(normalized)) {
@@ -92,9 +106,7 @@ export const inboundSmsWebhook = async (request: Request, response: Response) =>
 			);
 
 			logWithTime('twilioInboundWebhook=>optOut', { from, keyword: body });
-		}
-
-		if (START_KEYWORDS.has(normalized)) {
+		} else if (START_KEYWORDS.has(normalized)) {
 			await admin.firestore().collection('sms_opt_outs').doc(from).set(
 				{
 					phoneNumber: from,
@@ -127,36 +139,67 @@ export const inboundSmsWebhook = async (request: Request, response: Response) =>
 	}
 };
 
+export const trackClick = functions.https.onRequest(async (req, res) => {
+	const userId = req.query.u || 'unknown';
+	const campaign = req.query.c || 'vote-alice-2026';
+
+	const realUrl = 'https://americasfavpet.com/2026/alice-1d7d';
+
+	await admin
+		.firestore()
+		.collection('sms_clicks')
+		.add({
+			userId,
+			campaign,
+			ip: req.headers['x-forwarded-for'] || req.ip,
+			userAgent: req.headers['user-agent'] || '',
+			timestamp: admin.firestore.FieldValue.serverTimestamp(),
+		});
+
+	// Redirect with fallback message
+	res.set('Cache-Control', 'no-store');
+	res.set('Location', realUrl);
+	res.status(302).send(`
+    <html><body>
+      <p>Redirecting to the voting page…</p>
+      <p><a href="${realUrl}">Click here if not redirected</a></p>
+    </body></html>
+  `);
+});
+
 function getPublicUrl(req: Request): string {
 	const proto = (req.header('x-forwarded-proto') || 'https').split(',')[0].trim();
 	const host = (req.header('x-forwarded-host') || req.header('host') || '').split(',')[0].trim();
-	const originalUrl = (req.originalUrl || req.url || '').toString();
-	return `${proto}://${host}${originalUrl}`;
+	const originalUrl = req.originalUrl.toString();
+
+	// Cloud Functions strips the function name from originalUrl during routing.
+	const functionName = 'twilio'; // your exported function name
+
+	return `${proto}://${host}/${functionName}${originalUrl}`;
+}
+
+function validateTwilioSignature(authToken: string, twilioSignature: string, url: string, params: Record<string, any>): boolean {
+	try {
+		return twilio.validateRequest(authToken, twilioSignature, url, params);
+	} catch {
+		return false;
+	}
 }
 
 /**
- * Twilio signature validation (no external dependency):
- * base64( HMAC-SHA1( authToken, url + concat(sorted(params)) ) )
+ * Loads Twilio Auth Token from:
+ * 1) process.env.TWILIO_AUTH_TOKEN (local .env, Cloud Run env, etc.)
+ * 2) Firebase Functions runtime config: twilio.auth_token (set via firebase functions:config:set ...)
+ *
+ * Note: functions.config() is deprecated but still works on v1. We access it via any-cast to avoid TS noise.
  */
-function validateTwilioSignature(authToken: string, twilioSignature: string, url: string, params: Record<string, any>): boolean {
-	// Twilio concatenation: URL + each param name + value, sorted by param name
-	const sortedKeys = Object.keys(params || {}).sort();
-	let data = url;
+function getTwilioAuthToken(): string | undefined {
+	if (process.env.TWILIO_AUTH_TOKEN) return process.env.TWILIO_AUTH_TOKEN;
 
-	for (const key of sortedKeys) {
-		const value = params[key];
-		if (value === undefined || value === null) continue;
-		data += key + value.toString();
-	}
-
-	const computed = crypto.createHmac('sha1', authToken).update(data, 'utf8').digest('base64');
-
-	// Best option: compare decoded signature bytes using timingSafeEqual, with TS-friendly Uint8Array
 	try {
-		const a = Uint8Array.from(Buffer.from(computed, 'base64'));
-		const b = Uint8Array.from(Buffer.from(twilioSignature, 'base64'));
-		return a.length === b.length && crypto.timingSafeEqual(a, b);
+		const cfg = (functions as any).config?.() ?? {};
+		return cfg?.twilio?.auth_token;
 	} catch {
-		return false;
+		return undefined;
 	}
 }
