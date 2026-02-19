@@ -1,205 +1,143 @@
 import { Request, Response } from 'express';
-import * as functions from 'firebase-functions/v1';
-import { logger } from 'firebase-functions/v1';
-import twilio from 'twilio';
-import { admin, CustomError, logWithTime, safeStringify } from '../modules';
+import twilio, { Twilio } from 'twilio';
+import { admin } from '../modules/firebase.module';
 
-type TwilioInboundPayload = {
-	From?: string;
-	To?: string;
-	Body?: string;
-	SmsSid?: string;
-	MessageSid?: string;
-	NumMedia?: string;
-	[key: string]: any;
-};
+export class TwilioController {
+	private static instance: TwilioController;
+	private client?: Twilio;
 
-const STOP_KEYWORDS = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit']);
-const START_KEYWORDS = new Set(['start', 'yes', 'unstop']);
+	private constructor() {}
 
-/**
- * If you want signature validation while testing locally, set:
- * TWILIO_VALIDATE_SIGNATURE_IN_EMULATOR=true
- */
-const SHOULD_VALIDATE_SIGNATURE_IN_EMULATOR = (process.env.TWILIO_VALIDATE_SIGNATURE_IN_EMULATOR || '').toLowerCase() === 'true';
-
-export const inboundSmsWebhook = async (request: Request, response: Response) => {
-	try {
-		if (request.method !== 'POST') {
-			response.status(405).send('Method Not Allowed');
-			return;
+	public static getInstance(): TwilioController {
+		if (!TwilioController.instance) {
+			TwilioController.instance = new TwilioController();
 		}
+		return TwilioController.instance;
+	}
 
-		// Twilio posts application/x-www-form-urlencoded. With Express urlencoded enabled, this will be an object.
-		const payload: TwilioInboundPayload = (request.body ?? {}) as TwilioInboundPayload;
+	/**
+	 * Lazily initializes the Twilio client.
+	 * Required for Gen2 because secrets are injected at invocation time.
+	 */
+	private getClient(): Twilio {
+		if (!this.client) {
+			const accountSid = process.env.TWILIO_ACCOUNT_SID;
+			const authToken = process.env.TWILIO_AUTH_TOKEN;
 
-		// Signature validation (recommended in production)
-		const authToken = getTwilioAuthToken();
-		const signature = (request.header('X-Twilio-Signature') || '').trim();
-
-		const isEmulator = !!process.env.FUNCTIONS_EMULATOR;
-		const shouldValidateSignature = !isEmulator || SHOULD_VALIDATE_SIGNATURE_IN_EMULATOR;
-
-		if (shouldValidateSignature) {
-			if (!authToken) {
-				logger.warn('TWILIO_AUTH_TOKEN is missing. Skipping signature validation.');
-			} else if (!signature) {
-				logger.warn('X-Twilio-Signature header is missing. Skipping signature validation.');
-			} else {
-				const url = getPublicUrl(request);
-				const isValid = validateTwilioSignature(authToken, signature, url, payload);
-				if (!isValid) {
-					logger.warn('Invalid Twilio signature', { url });
-					response.status(403).send('Forbidden');
-					return;
-				}
+			if (!accountSid || !authToken) {
+				throw new Error('Twilio secrets not available at runtime.');
 			}
-		} else if (isEmulator) {
-			logger.log('Twilio signature validation skipped in emulator.');
+
+			this.client = twilio(accountSid, authToken);
 		}
 
-		const from = (payload.From || '').trim();
-		const to = (payload.To || '').trim();
-		const body = (payload.Body ?? '').toString().trim();
-		const normalized = body.toLowerCase();
+		return this.client;
+	}
 
-		if (!from) {
-			response.status(400).send('Missing From');
+	// ======================================================
+	// Firestore-triggered outbound SMS
+	// ======================================================
+
+	public async processFirestoreMessage(docRef: FirebaseFirestore.DocumentReference): Promise<void> {
+		const snap = await docRef.get();
+		const data = snap.data();
+
+		if (!data) return;
+
+		// Prevent duplicate sends
+		if (data.status === 'sent' && data.sid) return;
+
+		const { to, body, mediaUrls } = data;
+
+		if (!to || !body) {
+			await docRef.update({
+				status: 'error',
+				errorMessage: 'Missing required fields: to and/or body',
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+			});
 			return;
 		}
 
-		if (isEmulator) {
-			logger.log(`twilio inbound from=${from} to=${to} body=${body}`);
-			logger.log(`payload=${safeStringify(payload, 2)}`);
-		}
+		const client = this.getClient();
 
-		// Always store inbound message (use MessageSid as doc id when available to avoid duplicates)
-		const inboundRef = payload.MessageSid ? admin.firestore().collection('sms_inbound').doc(payload.MessageSid) : admin.firestore().collection('sms_inbound').doc();
+		try {
+			// Mark processing first
+			await docRef.update({
+				status: 'processing',
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+			});
 
-		await inboundRef.set(
-			{
-				from,
+			const message = await client.messages.create({
 				to,
 				body,
-				normalized,
-				smsSid: payload.SmsSid || null,
-				messageSid: payload.MessageSid || null,
-				numMedia: payload.NumMedia || null,
-				raw: payload,
-				createdAt: admin.firestore.FieldValue.serverTimestamp(),
-			},
-			{ merge: true },
-		);
+				messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+				...(Array.isArray(mediaUrls) && mediaUrls.length ? { mediaUrl: mediaUrls } : {}),
+			});
 
-		// Record STOP / START style keywords for your own visibility
-		if (STOP_KEYWORDS.has(normalized)) {
-			await admin.firestore().collection('sms_opt_outs').doc(from).set(
-				{
-					phoneNumber: from,
-					to,
-					keyword: body,
-					status: 'opted_out',
-					source: 'twilio_inbound_webhook',
-					updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-				},
-				{ merge: true },
-			);
+			await docRef.update({
+				status: 'sent',
+				sid: message.sid,
+				dateSent: admin.firestore.FieldValue.serverTimestamp(),
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+			});
+		} catch (error: any) {
+			await docRef.update({
+				status: 'error',
+				errorMessage: error?.message || String(error),
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+			});
 
-			logWithTime('twilioInboundWebhook=>optOut', { from, keyword: body });
-		} else if (START_KEYWORDS.has(normalized)) {
-			await admin.firestore().collection('sms_opt_outs').doc(from).set(
-				{
-					phoneNumber: from,
-					to,
-					keyword: body,
-					status: 'resubscribe_requested',
-					source: 'twilio_inbound_webhook',
-					updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-				},
-				{ merge: true },
-			);
+			throw error;
+		}
+	}
 
-			logWithTime('twilioInboundWebhook=>resubscribeRequested', { from, keyword: body });
+	// ======================================================
+	// Twilio Delivery Status Webhook
+	// ======================================================
+
+	public async handleStatusWebhook(req: Request, res: Response): Promise<void> {
+		const messageSid = req.body?.MessageSid;
+		const messageStatus = req.body?.MessageStatus;
+
+		if (!messageSid) {
+			res.status(400).send('Missing MessageSid');
+			return;
 		}
 
-		// Return empty TwiML so Twilio is happy.
-		response.status(200).set('Content-Type', 'text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response></Response>`);
-	} catch (e) {
-		const additionalInfo = {
-			timestamp: new Date().toISOString(),
-			method: request.method,
-			headers: request.headers,
-			body: request.body,
-			originalError: e instanceof Error ? e.message : 'Unknown error',
-		};
+		try {
+			const snapshot = await admin.firestore().collection('sms_messages').where('sid', '==', messageSid).limit(1).get();
 
-		logger.error('Error inboundSmsWebhook:', additionalInfo);
+			if (!snapshot.empty) {
+				await snapshot.docs[0].ref.update({
+					deliveryStatus: messageStatus || 'unknown',
+					statusUpdated: admin.firestore.FieldValue.serverTimestamp(),
+				});
+			}
 
-		throw new CustomError('Failed inboundSmsWebhook', 'controller=>twilio=>inboundSmsWebhook', additionalInfo);
+			res.sendStatus(200);
+		} catch (error) {
+			res.status(500).send('Failed to update delivery status');
+		}
 	}
-};
 
-export const trackClick = functions.https.onRequest(async (req, res) => {
-	const userId = req.query.u || 'unknown';
-	const campaign = req.query.c || 'vote-alice-2026';
+	// ======================================================
+	// Optional: Inbound SMS Webhook
+	// ======================================================
 
-	const realUrl = 'https://americasfavpet.com/2026/alice-1d7d';
+	public async handleInboundWebhook(req: Request, res: Response): Promise<void> {
+		const { From, Body, MessageSid } = req.body;
 
-	await admin
-		.firestore()
-		.collection('sms_clicks')
-		.add({
-			userId,
-			campaign,
-			ip: req.headers['x-forwarded-for'] || req.ip,
-			userAgent: req.headers['user-agent'] || '',
-			timestamp: admin.firestore.FieldValue.serverTimestamp(),
-		});
+		await admin
+			.firestore()
+			.collection('sms_inbound')
+			.add({
+				from: From || null,
+				body: Body || null,
+				sid: MessageSid || null,
+				receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+				raw: req.body || {},
+			});
 
-	// Redirect with fallback message
-	res.set('Cache-Control', 'no-store');
-	res.set('Location', realUrl);
-	res.status(302).send(`
-    <html><body>
-      <p>Redirecting to the voting page…</p>
-      <p><a href="${realUrl}">Click here if not redirected</a></p>
-    </body></html>
-  `);
-});
-
-function getPublicUrl(req: Request): string {
-	const proto = (req.header('x-forwarded-proto') || 'https').split(',')[0].trim();
-	const host = (req.header('x-forwarded-host') || req.header('host') || '').split(',')[0].trim();
-	const originalUrl = req.originalUrl.toString();
-
-	// Cloud Functions strips the function name from originalUrl during routing.
-	const functionName = 'twilio'; // your exported function name
-
-	return `${proto}://${host}/${functionName}${originalUrl}`;
-}
-
-function validateTwilioSignature(authToken: string, twilioSignature: string, url: string, params: Record<string, any>): boolean {
-	try {
-		return twilio.validateRequest(authToken, twilioSignature, url, params);
-	} catch {
-		return false;
-	}
-}
-
-/**
- * Loads Twilio Auth Token from:
- * 1) process.env.TWILIO_AUTH_TOKEN (local .env, Cloud Run env, etc.)
- * 2) Firebase Functions runtime config: twilio.auth_token (set via firebase functions:config:set ...)
- *
- * Note: functions.config() is deprecated but still works on v1. We access it via any-cast to avoid TS noise.
- */
-function getTwilioAuthToken(): string | undefined {
-	if (process.env.TWILIO_AUTH_TOKEN) return process.env.TWILIO_AUTH_TOKEN;
-
-	try {
-		const cfg = (functions as any).config?.() ?? {};
-		return cfg?.twilio?.auth_token;
-	} catch {
-		return undefined;
+		res.type('text/xml').send('<Response></Response>');
 	}
 }

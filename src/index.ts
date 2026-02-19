@@ -1,28 +1,25 @@
 import * as Sentry from '@sentry/google-cloud-serverless';
 import * as dotenv from 'dotenv';
 import Express from 'express';
-import * as functions from 'firebase-functions/v1';
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+import { onRequest } from 'firebase-functions/v2/https';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
 import fs from 'fs';
 import path from 'path';
 
 import { dailyJobs, violationsJob } from './controllers';
-import { IRoutes } from './interfaces';
+import { TwilioController } from './controllers/twilio.controller';
 import { cors, errorHandler } from './middleware';
 import { routes } from './routes';
 
 /**
  * Load local env files for emulator/dev only.
- * In production, use real environment variables or Firebase runtime config/secrets.
  */
 (function loadLocalEnv() {
-	// Firebase emulator sets this
 	const isEmulator = !!process.env.FUNCTIONS_EMULATOR;
-
 	if (!isEmulator) return;
 
-	// Allow forcing a specific env file: ENV_FILE=.env.gregharner
 	const forcedEnvFile = process.env.ENV_FILE?.trim();
-
 	const candidates = forcedEnvFile ? [forcedEnvFile] : ['.env.dev', '.env.gregharner', '.env'];
 
 	for (const file of candidates) {
@@ -35,8 +32,8 @@ import { routes } from './routes';
 	}
 })();
 
-// Initialize Sentry for error tracking
-const isProd = process.env.GCLOUD_PROJECT === 'valiant-splicer-224515';
+// Initialize Sentry
+const isProd = process.env['GCLOUD_PROJECT'] === 'valiant-splicer-224515';
 
 Sentry.init({
 	dsn: 'https://3bc129af82c1d7ef8f769984a04535df@o4508904065204224.ingest.us.sentry.io/4508989823451136',
@@ -46,121 +43,144 @@ Sentry.init({
 	tracesSampleRate: 1.0,
 });
 
-/**
- * Wraps functions with Sentry error tracking.
- * This ensures that any uncaught errors are reported to Sentry.
- */
 const wrapWithSentry = (fn: Function) => {
 	return async (...args: any[]) => {
 		try {
 			return await fn(...args);
 		} catch (error) {
 			Sentry.captureException(error);
-			throw error; // Re-throw to ensure Firebase logs the failure
+			throw error;
 		}
 	};
 };
 
 /**
- * Iterates over route definitions and creates Firebase functions for each one.
- * Each function serves an Express app handling API requests.
+ * Express route-based HTTPS functions (Gen2)
  */
-routes.forEach((routerObj: IRoutes) => {
+routes.forEach(routerObj => {
 	const app = Express();
 
 	app.use(cors);
 	app.set('views', path.join(__dirname, 'views'));
 	app.set('view engine', 'ejs');
 
-	// Body parsers (needed for Twilio webhooks + any JSON payloads)
 	app.use(Express.json({ limit: '1mb' }));
 	app.use(Express.urlencoded({ extended: false }));
+
 	app.use(routerObj.router);
 
-	// Catch-all route for unmatched paths
 	app.all('*', (req, res) => {
 		res.status(404).json({ error: 'Route not found' });
 	});
 
-	// ✅ Use your custom error-handling middleware
 	app.use(errorHandler);
 
-	// Handle errors and report them to Sentry
-	exports[routerObj.name] = functions.https.onRequest(async (req, res) => {
-		try {
-			await new Promise((resolve, reject) => {
-				app(req, res, err => (err ? reject(err) : resolve(null)));
-			});
-		} catch (error) {
-			Sentry.captureException(error);
-			res.status(500).send('Internal Server Error');
-		}
-	});
+	exports[routerObj.name] = onRequest(
+		{
+			region: 'us-central1',
+		},
+		async (req, res) => {
+			try {
+				await new Promise((resolve, reject) => {
+					app(req, res, err => (err ? reject(err) : resolve(null)));
+				});
+			} catch (error) {
+				Sentry.captureException(error);
+				res.status(500).send('Internal Server Error');
+			}
+		},
+	);
 });
 
 /**
- * Scheduled job that runs Monday to Friday at 9 AM.
- * This function calls `dailyJobs()` if the project environment is correct.
+ * Scheduled job: Monday to Friday at 9 AM
  */
-export const scheduledFunction = functions.pubsub.schedule('0 9 * * 1-5').onRun(
+export const scheduledFunction = onSchedule(
+	{
+		schedule: '0 9 * * 1-5',
+		region: 'us-central1',
+	},
 	wrapWithSentry(async () => {
-		if (process.env.GCLOUD_PROJECT === 'valiant-splicer-224515') {
+		if (process.env['GCLOUD_PROJECT'] === 'valiant-splicer-224515') {
 			await dailyJobs();
 		}
 	}),
 );
 
 /**
- * Scheduled job that runs every Saturday at 1 AM.
- * This function calls `dailyJobs()` if the project environment is correct.
+ * Scheduled job: Saturday at 1 AM
  */
-export const scheduledSaturdayFunction = functions.pubsub.schedule('0 1 * * 6').onRun(
+export const scheduledSaturdayFunction = onSchedule(
+	{
+		schedule: '0 1 * * 6',
+		region: 'us-central1',
+	},
 	wrapWithSentry(async () => {
-		if (process.env.GCLOUD_PROJECT === 'valiant-splicer-224515') {
+		if (process.env['GCLOUD_PROJECT'] === 'valiant-splicer-224515') {
 			await dailyJobs();
 		}
 	}),
 );
 
-export const scheduledViolationsJob = functions.pubsub.schedule('0 16,17,18,19,20,21 * * 1-6').onRun(
+/**
+ * Scheduled violations job
+ */
+export const scheduledViolationsJob = onSchedule(
+	{
+		schedule: '0 16,17,18,19,20,21 * * 1-6',
+		region: 'us-central1',
+	},
 	wrapWithSentry(async () => {
-		if (process.env.GCLOUD_PROJECT === 'valiant-splicer-224515') {
+		if (process.env['GCLOUD_PROJECT'] === 'valiant-splicer-224515') {
 			await violationsJob();
 		}
 	}),
 );
 
 /**
- * Firebase function that returns non-sensitive environment variables.
- * This allows the frontend to access selected environment variables without exposing sensitive data.
+ * Return non-sensitive environment variables
  */
-export const currentEnvironment = functions.https.onRequest(async (request, response) => {
-	try {
-		cors(request, response, () => {
-			// List of environment variables to exclude from the response
-			const keysToExclude: string[] = [
-				'CLIENT_SECRET',
-				'DATABASE_PASSWORD',
-				'API_KEY',
-				'CLIENT_ID',
+export const currentEnvironment = onRequest(
+	{
+		region: 'us-central1',
+	},
+	async (request, response) => {
+		try {
+			cors(request, response, () => {
+				const keysToExclude: string[] = ['CLIENT_SECRET', 'DATABASE_PASSWORD', 'API_KEY', 'CLIENT_ID', 'TWILIO_AUTH_TOKEN', 'TWILIO_ACCOUNT_SID', 'TWILIO_MESSAGING_SERVICE_SID'];
 
-				// ✅ Add Twilio secrets
-				'TWILIO_AUTH_TOKEN',
-				'TWILIO_ACCOUNT_SID',
-			];
+				const envVars: Record<string, string | undefined> = Object.keys(process.env).reduce(
+					(acc, key) => {
+						if (!keysToExclude.includes(key)) {
+							acc[key] = process.env[key];
+						}
+						return acc;
+					},
+					{} as Record<string, string | undefined>,
+				);
 
-			// Filter environment variables, excluding sensitive keys
-			const envVars: { [key: string]: string | undefined } = Object.keys(process.env).reduce<{ [key: string]: string | undefined }>((acc, key) => {
-				if (!keysToExclude.includes(key)) {
-					acc[key] = process.env[key];
-				}
-				return acc;
-			}, {});
+				response.json(envVars);
+			});
+		} catch (error) {
+			Sentry.captureException(error);
+			response.status(500).send('Internal Server Error');
+		}
+	},
+);
 
-			response.json(envVars);
-		});
-	} catch (error) {
-		Sentry.captureException(error);
-		response.status(500).send('Internal Server Error');
-	}
-});
+/**
+ * Twilio Firestore Trigger (already Gen2)
+ */
+const twilioController = TwilioController.getInstance();
+
+export const sendMessage = onDocumentCreated(
+	{
+		document: 'sms_messages/{messageId}',
+		region: 'us-central1',
+		secrets: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_MESSAGING_SERVICE_SID'],
+	},
+	async event => {
+		if (!event.data) return;
+		await twilioController.processFirestoreMessage(event.data.ref);
+	},
+);

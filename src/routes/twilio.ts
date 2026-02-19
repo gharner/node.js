@@ -1,15 +1,12 @@
 import { Router } from 'express';
-import { inboundSmsWebhook, trackClick } from '../controllers';
-import { IRoutes } from '../interfaces';
+import { TwilioController } from '../controllers/twilio.controller';
 
 const router = Router();
+const controller = TwilioController.getInstance();
 
-// Twilio will POST form-urlencoded inbound messages here
-router.post('/v1/twilio/inbound', inboundSmsWebhook);
-router.get('/v1/twilio/track', trackClick);
-router.get('/vote/track', trackClick);
+// Twilio Delivery Status Webhook
+router.post('/status', async (req, res) => {
+	await controller.handleStatusWebhook(req, res);
+});
 
-export const twilio: IRoutes = {
-	name: 'twilio',
-	router,
-};
+export default router;
