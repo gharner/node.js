@@ -1,5 +1,5 @@
 import { EmailMessage, Schedule } from '../interfaces';
-import { admin, CustomError } from '../modules';
+import { CustomError, enterpriseDb } from '../modules';
 
 export const dailyJobs = async () => {
 	await getSchedules().catch(e => {
@@ -22,10 +22,11 @@ async function getSchedules() {
 	const to = tomorrow.toISOString().slice(0, 10);
 
 	try {
-		const snapshot = await admin.firestore().collection('mas-schedules').where('start.dateTime', '>', from).where('start.dateTime', '<', to).get();
+		// ✅ ENTERPRISE DATABASE QUERY
+		const snapshot = await enterpriseDb.collection('mas-schedules').where('start.dateTime', '>', from).where('start.dateTime', '<', to).get();
 
 		const data = snapshot.docs.map(doc => doc.data()) as Schedule[];
-		processSchedules(data);
+		await processSchedules(data);
 	} catch (e) {
 		const additionalInfo = {
 			timestamp: new Date().toISOString(),
@@ -52,10 +53,12 @@ async function processSchedules(schedules: Schedule[]) {
 				.filter((email: string) => email)
 				.join();
 
+			// ✅ Email Notification
 			if (groupEmail) {
 				await sendNotification('mas-email', 'accounts@yongsa.net', groupEmail, '', schedule);
 			}
 
+			// ✅ Twilio Notifications
 			for (const notify of uniqueNotifications.filter((f: { phone: string }) => f.phone)) {
 				await sendNotification('mas-twilio', notify.phone, '', '', schedule);
 			}
@@ -72,9 +75,11 @@ async function processSchedules(schedules: Schedule[]) {
 
 function getUniqueNotifications(notifications: any[]) {
 	const uniqueSet = new Set();
+
 	return notifications.filter((notification: { email?: string; phone?: string }) => {
 		const identifier = `${notification.email || ''}-${notification.phone || ''}`;
 		const duplicate = uniqueSet.has(identifier);
+
 		uniqueSet.add(identifier);
 		return !duplicate;
 	});
@@ -82,20 +87,23 @@ function getUniqueNotifications(notifications: any[]) {
 
 async function sendNotification(collection: string, to: string, bcc: string | string[], cc: string | string[], schedule: Schedule) {
 	const startDate = dateLocalString(schedule.start.dateTime);
+
 	let message: EmailMessage | { to: string; body: string };
 
 	const normalizeEmailField = (input: string | string[] | undefined): string[] | undefined => {
 		if (!input) return undefined;
 		if (Array.isArray(input)) return input;
+
 		return input
 			.split(',')
 			.map(s => s.trim())
 			.filter(Boolean);
 	};
 
+	// ✅ Email Doc
 	if (collection === 'mas-email') {
 		message = {
-			to,
+			to: [to],
 			bcc: normalizeEmailField(bcc),
 			cc: normalizeEmailField(cc),
 			message: {
@@ -103,7 +111,10 @@ async function sendNotification(collection: string, to: string, bcc: string | st
 				text: `You have a reservation for the ${schedule.summary} class at ${startDate}.`,
 			},
 		};
-	} else {
+	}
+
+	// ✅ SMS Doc
+	else {
 		message = {
 			to: `+1${to}`,
 			body: `You have a reservation for the ${schedule.summary} class at ${startDate}`,
@@ -111,7 +122,8 @@ async function sendNotification(collection: string, to: string, bcc: string | st
 	}
 
 	try {
-		await admin.firestore().collection(collection).add(message);
+		// ✅ ENTERPRISE DATABASE WRITE
+		await enterpriseDb.collection(collection).add(message);
 	} catch (e) {
 		const additionalInfo = {
 			timestamp: new Date().toISOString(),
@@ -131,5 +143,7 @@ function dateLocalString(d: any) {
 		}
 	}
 
-	return d.toLocaleString('en-US', { timeZone: 'America/New_York' });
+	return d.toLocaleString('en-US', {
+		timeZone: 'America/New_York',
+	});
 }

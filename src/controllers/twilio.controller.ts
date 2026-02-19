@@ -1,6 +1,20 @@
+import { DocumentReference, FieldValue } from '@google-cloud/firestore';
 import { Request, Response } from 'express';
+import { defineSecret } from 'firebase-functions/params';
 import twilio, { Twilio } from 'twilio';
-import { admin } from '../modules/firebase.module';
+import { enterpriseDb } from '../modules';
+
+/* ======================================================
+   Secrets (Gen2 Safe)
+====================================================== */
+
+const TWILIO_ACCOUNT_SID = defineSecret('TWILIO_ACCOUNT_SID');
+const TWILIO_AUTH_TOKEN = defineSecret('TWILIO_AUTH_TOKEN');
+const TWILIO_MESSAGING_SERVICE_SID = defineSecret('TWILIO_MESSAGING_SERVICE_SID');
+
+/* ======================================================
+   Twilio Controller
+====================================================== */
 
 export class TwilioController {
 	private static instance: TwilioController;
@@ -15,37 +29,29 @@ export class TwilioController {
 		return TwilioController.instance;
 	}
 
-	/**
-	 * Lazily initializes the Twilio client.
-	 * Required for Gen2 because secrets are injected at invocation time.
-	 */
+	/* ======================================================
+	   Twilio Client (Lazy Init, Gen2 Safe)
+	====================================================== */
+
 	private getClient(): Twilio {
 		if (!this.client) {
-			const accountSid = process.env.TWILIO_ACCOUNT_SID;
-			const authToken = process.env.TWILIO_AUTH_TOKEN;
-
-			if (!accountSid || !authToken) {
-				throw new Error('Twilio secrets not available at runtime.');
-			}
-
-			this.client = twilio(accountSid, authToken);
+			this.client = twilio(TWILIO_ACCOUNT_SID.value(), TWILIO_AUTH_TOKEN.value());
 		}
-
 		return this.client;
 	}
 
-	// ======================================================
-	// Firestore-triggered outbound SMS
-	// ======================================================
+	/* ======================================================
+	   Firestore-triggered outbound SMS
+	   (Enterprise DB only)
+	====================================================== */
 
-	public async processFirestoreMessage(docRef: FirebaseFirestore.DocumentReference): Promise<void> {
+	public async processFirestoreMessage(docRef: DocumentReference): Promise<void> {
 		const snap = await docRef.get();
 		const data = snap.data();
 
 		if (!data) return;
 
-		// Prevent duplicate sends
-		if (data.status === 'sent' && data.sid) return;
+		if (data.status === 'processing') return;
 
 		const { to, body, mediaUrls } = data;
 
@@ -53,7 +59,7 @@ export class TwilioController {
 			await docRef.update({
 				status: 'error',
 				errorMessage: 'Missing required fields: to and/or body',
-				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+				updatedAt: FieldValue.serverTimestamp(),
 			});
 			return;
 		}
@@ -61,43 +67,64 @@ export class TwilioController {
 		const client = this.getClient();
 
 		try {
-			// Mark processing first
 			await docRef.update({
 				status: 'processing',
-				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+				updatedAt: FieldValue.serverTimestamp(),
 			});
 
 			const message = await client.messages.create({
 				to,
 				body,
-				messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+				messagingServiceSid: TWILIO_MESSAGING_SERVICE_SID.value(),
 				...(Array.isArray(mediaUrls) && mediaUrls.length ? { mediaUrl: mediaUrls } : {}),
 			});
 
 			await docRef.update({
 				status: 'sent',
 				sid: message.sid,
-				dateSent: admin.firestore.FieldValue.serverTimestamp(),
-				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+				dateSent: FieldValue.serverTimestamp(),
+				updatedAt: FieldValue.serverTimestamp(),
 			});
 		} catch (error: any) {
 			await docRef.update({
 				status: 'error',
 				errorMessage: error?.message || String(error),
-				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+				updatedAt: FieldValue.serverTimestamp(),
 			});
-
 			throw error;
 		}
 	}
 
-	// ======================================================
-	// Twilio Delivery Status Webhook
-	// ======================================================
+	/* ======================================================
+	   Twilio Signature Validation (CRITICAL)
+	====================================================== */
+
+	private validateSignature(req: Request): boolean {
+		const signature = req.headers['x-twilio-signature'] as string;
+		if (!signature) return false;
+
+		const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+
+		// Twilio needs the raw body string. If Express.raw was used, req.body is a Buffer.
+		const raw = (req as any).rawBody ? (req as any).rawBody.toString('utf8') : Buffer.isBuffer(req.body) ? req.body.toString('utf8') : req.body;
+
+		return twilio.validateRequest(TWILIO_AUTH_TOKEN.value(), signature, fullUrl, raw);
+	}
+
+	/* ======================================================
+	   Twilio Delivery Status Webhook
+	   (Enterprise DB + Signature Validation)
+	====================================================== */
 
 	public async handleStatusWebhook(req: Request, res: Response): Promise<void> {
+		// ✅ Validate Twilio signature
+		if (!this.validateSignature(req)) {
+			res.status(403).send('Invalid Twilio signature');
+			return;
+		}
+
 		const messageSid = req.body?.MessageSid;
-		const messageStatus = req.body?.MessageStatus;
+		const messageStatus = req.body?.MessageStatus || 'unknown';
 
 		if (!messageSid) {
 			res.status(400).send('Missing MessageSid');
@@ -105,38 +132,69 @@ export class TwilioController {
 		}
 
 		try {
-			const snapshot = await admin.firestore().collection('sms_messages').where('sid', '==', messageSid).limit(1).get();
+			/* ======================================================
+		   Replay Protection (Twilio may retry webhooks)
+		   Prevent processing same status more than once
+		====================================================== */
+
+			const eventKey = `${messageSid}:${messageStatus}`;
+
+			const existingEvent = await enterpriseDb.collection('twilio_webhook_events').doc(eventKey).get();
+
+			if (existingEvent.exists) {
+				// Already processed — acknowledge but do nothing
+				res.sendStatus(200);
+				return;
+			}
+
+			// Record event as processed
+			await enterpriseDb.collection('twilio_webhook_events').doc(eventKey).set({
+				messageSid,
+				messageStatus,
+				processedAt: FieldValue.serverTimestamp(),
+			});
+
+			/* ======================================================
+		   Update Related SMS Document
+		====================================================== */
+
+			const snapshot = await enterpriseDb.collection('sms_messages').where('sid', '==', messageSid).limit(1).get();
 
 			if (!snapshot.empty) {
 				await snapshot.docs[0].ref.update({
-					deliveryStatus: messageStatus || 'unknown',
-					statusUpdated: admin.firestore.FieldValue.serverTimestamp(),
+					deliveryStatus: messageStatus,
+					statusUpdated: FieldValue.serverTimestamp(),
 				});
 			}
 
 			res.sendStatus(200);
 		} catch (error) {
+			// Log safely without leaking data
+			console.error('Twilio status webhook error:', error);
 			res.status(500).send('Failed to update delivery status');
 		}
 	}
 
-	// ======================================================
-	// Optional: Inbound SMS Webhook
-	// ======================================================
+	/* ======================================================
+	   Twilio Inbound Webhook
+	   (Enterprise DB + Signature Validation)
+	====================================================== */
 
 	public async handleInboundWebhook(req: Request, res: Response): Promise<void> {
+		if (!this.validateSignature(req)) {
+			res.status(403).send('Invalid Twilio signature');
+			return;
+		}
+
 		const { From, Body, MessageSid } = req.body;
 
-		await admin
-			.firestore()
-			.collection('sms_inbound')
-			.add({
-				from: From || null,
-				body: Body || null,
-				sid: MessageSid || null,
-				receivedAt: admin.firestore.FieldValue.serverTimestamp(),
-				raw: req.body || {},
-			});
+		await enterpriseDb.collection('sms_inbound').add({
+			from: From || null,
+			body: Body || null,
+			sid: MessageSid || null,
+			receivedAt: FieldValue.serverTimestamp(),
+			raw: req.body || {},
+		});
 
 		res.type('text/xml').send('<Response></Response>');
 	}

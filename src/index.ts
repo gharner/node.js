@@ -1,20 +1,22 @@
 import * as Sentry from '@sentry/google-cloud-serverless';
 import * as dotenv from 'dotenv';
 import Express from 'express';
+import { defineSecret } from 'firebase-functions/params';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { onRequest } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import fs from 'fs';
 import path from 'path';
-
 import { dailyJobs, violationsJob } from './controllers';
 import { TwilioController } from './controllers/twilio.controller';
 import { cors, errorHandler } from './middleware';
+import { debugGuard } from './middleware/debug-guard.middleware';
 import { routes } from './routes';
 
-/**
- * Load local env files for emulator/dev only.
- */
+/* ======================================================
+   Load .env only in emulator
+====================================================== */
+
 (function loadLocalEnv() {
 	const isEmulator = !!process.env.FUNCTIONS_EMULATOR;
 	if (!isEmulator) return;
@@ -32,7 +34,18 @@ import { routes } from './routes';
 	}
 })();
 
-// Initialize Sentry
+/* ======================================================
+   Twilio Secrets (Gen2 Required)
+====================================================== */
+
+const TWILIO_ACCOUNT_SID = defineSecret('TWILIO_ACCOUNT_SID');
+const TWILIO_AUTH_TOKEN = defineSecret('TWILIO_AUTH_TOKEN');
+const TWILIO_MESSAGING_SERVICE_SID = defineSecret('TWILIO_MESSAGING_SERVICE_SID');
+
+/* ======================================================
+   Sentry Setup
+====================================================== */
+
 const isProd = process.env['GCLOUD_PROJECT'] === 'valiant-splicer-224515';
 
 Sentry.init({
@@ -54,9 +67,10 @@ const wrapWithSentry = (fn: Function) => {
 	};
 };
 
-/**
- * Express route-based HTTPS functions (Gen2)
- */
+/* ======================================================
+   Express Route-Based HTTPS Functions (Gen2)
+====================================================== */
+
 routes.forEach(routerObj => {
 	const app = Express();
 
@@ -64,8 +78,22 @@ routes.forEach(routerObj => {
 	app.set('views', path.join(__dirname, 'views'));
 	app.set('view engine', 'ejs');
 
-	app.use(Express.json({ limit: '1mb' }));
-	app.use(Express.urlencoded({ extended: false }));
+	/**
+	 * IMPORTANT:
+	 * Twilio webhook endpoints must use raw body parsing BEFORE JSON parsing.
+	 * This avoids breaking Twilio signature validation.
+	 */
+	const isTwilioRouter = routerObj.name.toLowerCase().includes('twilio');
+
+	if (isTwilioRouter) {
+		// Parse raw first (Twilio)
+		const { twilioRawBody } = require('./middleware/twilio-raw-body.middleware');
+		app.use(twilioRawBody);
+	} else {
+		// Normal JSON parsing for all other routers
+		app.use(Express.json({ limit: '1mb' }));
+		app.use(Express.urlencoded({ extended: false }));
+	}
 
 	app.use(routerObj.router);
 
@@ -75,9 +103,12 @@ routes.forEach(routerObj => {
 
 	app.use(errorHandler);
 
+	const needsTwilioSecrets = isTwilioRouter;
+
 	exports[routerObj.name] = onRequest(
 		{
 			region: 'us-central1',
+			secrets: needsTwilioSecrets ? [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID] : undefined,
 		},
 		async (req, res) => {
 			try {
@@ -92,68 +123,69 @@ routes.forEach(routerObj => {
 	);
 });
 
-/**
- * Scheduled job: Monday to Friday at 9 AM
- */
+/* ======================================================
+   Scheduled Jobs
+====================================================== */
+
 export const scheduledFunction = onSchedule(
 	{
 		schedule: '0 9 * * 1-5',
 		region: 'us-central1',
 	},
 	wrapWithSentry(async () => {
-		if (process.env['GCLOUD_PROJECT'] === 'valiant-splicer-224515') {
+		if (isProd) {
 			await dailyJobs();
 		}
 	}),
 );
 
-/**
- * Scheduled job: Saturday at 1 AM
- */
 export const scheduledSaturdayFunction = onSchedule(
 	{
 		schedule: '0 1 * * 6',
 		region: 'us-central1',
 	},
 	wrapWithSentry(async () => {
-		if (process.env['GCLOUD_PROJECT'] === 'valiant-splicer-224515') {
+		if (isProd) {
 			await dailyJobs();
 		}
 	}),
 );
 
-/**
- * Scheduled violations job
- */
 export const scheduledViolationsJob = onSchedule(
 	{
 		schedule: '0 16,17,18,19,20,21 * * 1-6',
 		region: 'us-central1',
 	},
 	wrapWithSentry(async () => {
-		if (process.env['GCLOUD_PROJECT'] === 'valiant-splicer-224515') {
+		if (isProd) {
 			await violationsJob();
 		}
 	}),
 );
 
+/* ======================================================
+   Non-sensitive Environment Debug Endpoint
+====================================================== */
+
 /**
- * Return non-sensitive environment variables
+ * Debug-only environment endpoint
+ * 🚫 Disabled in production unless debug key is provided
  */
 export const currentEnvironment = onRequest(
 	{
 		region: 'us-central1',
+		secrets: ['MAS_DEBUG_KEY'],
 	},
 	async (request, response) => {
 		try {
-			cors(request, response, () => {
-				const keysToExclude: string[] = ['CLIENT_SECRET', 'DATABASE_PASSWORD', 'API_KEY', 'CLIENT_ID', 'TWILIO_AUTH_TOKEN', 'TWILIO_ACCOUNT_SID', 'TWILIO_MESSAGING_SERVICE_SID'];
+			// Protect this endpoint
+			debugGuard(request as any, response as any, () => {
+				// Only return very safe keys
+				const safeKeys = ['GCLOUD_PROJECT', 'FUNCTIONS_EMULATOR', 'NODE_ENV', 'LOCATION'];
 
-				const envVars: Record<string, string | undefined> = Object.keys(process.env).reduce(
+				const envVars: Record<string, string | undefined> = safeKeys.reduce(
 					(acc, key) => {
-						if (!keysToExclude.includes(key)) {
-							acc[key] = process.env[key];
-						}
+						acc[key] = process.env[key];
 						return acc;
 					},
 					{} as Record<string, string | undefined>,
@@ -168,16 +200,18 @@ export const currentEnvironment = onRequest(
 	},
 );
 
-/**
- * Twilio Firestore Trigger (already Gen2)
- */
+/* ======================================================
+   Twilio Firestore Trigger (Gen2 + Secrets)
+====================================================== */
+
 const twilioController = TwilioController.getInstance();
 
 export const sendMessage = onDocumentCreated(
 	{
 		document: 'sms_messages/{messageId}',
+		database: 'default', // ✅ ENTERPRISE DB TARGET
 		region: 'us-central1',
-		secrets: ['TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_MESSAGING_SERVICE_SID'],
+		secrets: [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID],
 	},
 	async event => {
 		if (!event.data) return;

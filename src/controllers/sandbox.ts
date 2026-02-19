@@ -1,8 +1,8 @@
 import axios from 'axios';
 import { Request, Response } from 'express';
 import { logger } from 'firebase-functions/v2';
-import { CustomError } from '../modules';
-import { admin } from '../modules/firebase.module';
+
+import { CustomError, enterpriseDb } from '../modules';
 
 /**
  * Fetches current International Space Station location
@@ -30,10 +30,12 @@ export const space_station = async (request: Request, response: Response): Promi
 
 /**
  * Fetches Firestore documents from mas-parameters collection
+ * ✅ ENTERPRISE DATABASE
  */
 export const getFirecloudDocuments = async (request: Request, response: Response): Promise<void> => {
 	try {
-		const querySnapshot = await admin.firestore().collection('mas-parameters').get();
+		// ✅ Enterprise Firestore Query
+		const querySnapshot = await enterpriseDb.collection('mas-parameters').get();
 
 		const documents = querySnapshot.docs.map(doc => ({
 			id: doc.id,
