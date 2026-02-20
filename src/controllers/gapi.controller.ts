@@ -1,206 +1,161 @@
-import crypto from 'crypto';
 import { Request, Response } from 'express';
-import { defineSecret, defineString } from 'firebase-functions/params';
-import { logger } from 'firebase-functions/v2';
-import { onRequest } from 'firebase-functions/v2/https';
-import { google } from 'googleapis';
+import * as admin from 'firebase-admin';
 
-import { FieldValue } from '@google-cloud/firestore';
-import { enterpriseDb } from '../modules';
-
-/* -----------------------------
-   Params + Secrets
------------------------------ */
-
-const GOOGLE_CLIENT_ID = defineString('MAS_GOOGLE_CLIENT_ID');
-const GOOGLE_REDIRECT_URI = defineString('MAS_GOOGLE_REDIRECT_URI');
-const GOOGLE_SCOPES = defineString('MAS_GOOGLE_SCOPES');
-
-const MAS_GOOGLE_CLIENT = defineSecret('MAS_GOOGLE_CLIENT');
-
-/* -----------------------------
-   Helpers
------------------------------ */
-
-const debugLog = (message: string, data?: any): void => {
-	if (process.env.FUNCTIONS_EMULATOR) {
-		logger.log(`${message}=${data ? JSON.stringify(data, null, 2) : ''}`);
-	}
-};
-
-const getRedirectUri = (): string => {
-	return process.env.FUNCTIONS_EMULATOR ? `http://127.0.0.1:5001/${process.env.GCLOUD_PROJECT}/us-central1/gapi/oAuthCallback` : GOOGLE_REDIRECT_URI.value();
-};
-
-const createOAuth2Client = () => {
-	return new google.auth.OAuth2(GOOGLE_CLIENT_ID.value(), MAS_GOOGLE_CLIENT.value(), getRedirectUri());
-};
-
-const getScopes = (): string[] => {
-	// You are currently storing scopes as a space-delimited string
-	// Example: "scope1 scope2 scope3"
-	return GOOGLE_SCOPES.value()
-		.split(' ')
-		.map(s => s.trim())
-		.filter(Boolean);
-};
-
-/* -----------------------------
-   OAuth State Storage (Enterprise)
-   - Prevents CSRF / callback injection
------------------------------ */
-
-const OAUTH_STATE_COLLECTION = 'oauthStates';
-const STATE_TTL_MINUTES = 10;
-
-async function createAndStoreState(): Promise<string> {
-	const state = crypto.randomUUID();
-
-	const now = Date.now();
-	const expiresAtMs = now + STATE_TTL_MINUTES * 60 * 1000;
-
-	await enterpriseDb.collection(OAUTH_STATE_COLLECTION).doc(state).set(
-		{
-			state,
-			used: false,
-			createdAt: FieldValue.serverTimestamp(),
-			expiresAtMs,
-		},
-		{ merge: false },
-	);
-
-	return state;
+if (!admin.apps.length) {
+	admin.initializeApp();
 }
 
-async function validateAndConsumeState(state: string): Promise<void> {
-	const ref = enterpriseDb.collection(OAUTH_STATE_COLLECTION).doc(state);
-	const snap = await ref.get();
-
-	if (!snap.exists) {
-		throw new Error('Invalid OAuth state (not found).');
-	}
-
-	const data = snap.data() as any;
-
-	if (data.used === true) {
-		throw new Error('Invalid OAuth state (already used).');
-	}
-
-	const expiresAtMs = Number(data.expiresAtMs || 0);
-	if (!expiresAtMs || Date.now() > expiresAtMs) {
-		throw new Error('Invalid OAuth state (expired).');
-	}
-
-	// Mark as used to prevent replay
-	await ref.set(
-		{
-			used: true,
-			usedAt: FieldValue.serverTimestamp(),
-		},
-		{ merge: true },
-	);
-}
-
-/* -----------------------------
-   OAuth Login URL
------------------------------ */
-
-export const googleLogin = onRequest({ secrets: [MAS_GOOGLE_CLIENT] }, async (request: Request, response: Response) => {
+/**
+ * Google Login
+ */
+export const googleLogin = async (req: Request, res: Response) => {
 	try {
-		const oAuth2Client = createOAuth2Client();
-		const scopes = getScopes();
+		// TODO: Replace with real Google auth URL generation
+		const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth';
 
-		// Generate and store CSRF state
-		const state = await createAndStoreState();
-
-		const authUrl = oAuth2Client.generateAuthUrl({
-			access_type: 'offline',
-			scope: scopes,
-			prompt: 'consent',
-			state,
-		});
-
-		debugLog('authUrl', authUrl);
-
-		response.set('Cache-Control', 'private, max-age=0, s-maxage=0');
-		response.status(200).send({ authUrl });
-	} catch (e) {
-		logger.error('Error in googleLogin:', e);
-		response.status(500).send({ error: 'Failed to generate login URL' });
+		return res.redirect(authUrl);
+	} catch (error) {
+		console.error('googleLogin error:', error);
+		return res.status(500).json({ error: 'Failed to initiate Google login' });
 	}
-});
+};
 
-/* -----------------------------
-   OAuth Callback
-   - Validates state (CSRF)
-   - Exchanges code for tokens
-   - Stores tokens in Enterprise DB
------------------------------ */
-
-export const oAuthCallback = onRequest({ secrets: [MAS_GOOGLE_CLIENT] }, async (request: Request, response: Response) => {
-	const { error, code, state } = request.query as {
-		error?: string;
-		code?: string;
-		state?: string;
-	};
-
-	if (error) {
-		response.status(400).send({ error: `OAuth error: ${error}` });
-		return;
-	}
-
-	if (!code) {
-		response.status(400).send({ error: 'Missing authorization code' });
-		return;
-	}
-
-	if (!state) {
-		response.status(400).send({ error: 'Missing OAuth state' });
-		return;
-	}
-
+/**
+ * OAuth Callback
+ */
+export const oAuthCallback = async (req: Request, res: Response) => {
 	try {
-		// Validate state, one-time use
-		await validateAndConsumeState(state);
+		const { code } = req.query;
 
-		const oAuth2Client = createOAuth2Client();
-		const { tokens } = await oAuth2Client.getToken(code);
+		if (!code) {
+			return res.status(400).json({ error: 'Missing authorization code' });
+		}
 
-		// Optional: get user info (helps you associate token to a user)
-		oAuth2Client.setCredentials(tokens);
+		// TODO: Exchange code for token here
 
-		const oauth2 = google.oauth2({
-			auth: oAuth2Client,
-			version: 'v2',
-		});
-
-		const { data } = await oauth2.userinfo.get();
-		const email = data?.email || null;
-
-		// Store token payload in Enterprise DB
-		await enterpriseDb.collection('oauthTokens').add({
-			email,
-			user: data || null,
-			tokens,
-			createdAt: FieldValue.serverTimestamp(),
-			state,
-		});
-
-		// If you are using a popup flow, return HTML that closes the window
-		const htmlResponse = `<!DOCTYPE html>
-<html lang="en">
-<head>
-	<title>Google OAuth Complete</title>
-	<script>window.close();</script>
-</head>
-<body>
-	<h4>OAuth complete. You can close this window.</h4>
-</body>
-</html>`;
-
-		response.status(200).send(htmlResponse);
-	} catch (e) {
-		logger.error('OAuth callback failed:', e);
-		response.status(500).send({ error: 'OAuth callback failed' });
+		return res.send('OAuth callback received.');
+	} catch (error) {
+		console.error('oAuthCallback error:', error);
+		return res.status(500).json({ error: 'OAuth callback failed' });
 	}
-});
+};
+
+/**
+ * Access Token
+ */
+export const accessToken = async (req: Request, res: Response) => {
+	try {
+		return res.json({ message: 'Access token endpoint' });
+	} catch (error) {
+		console.error('accessToken error:', error);
+		return res.status(500).json({ error: 'Failed to retrieve access token' });
+	}
+};
+
+/**
+ * Directory
+ */
+export const directory = async (req: Request, res: Response) => {
+	try {
+		return res.json({ message: 'Directory endpoint' });
+	} catch (error) {
+		console.error('directory error:', error);
+		return res.status(500).json({ error: 'Directory failed' });
+	}
+};
+
+/**
+ * Events
+ */
+export const events = async (req: Request, res: Response) => {
+	try {
+		return res.json({ message: 'Events endpoint' });
+	} catch (error) {
+		console.error('events error:', error);
+		return res.status(500).json({ error: 'Events failed' });
+	}
+};
+
+/**
+ * Groups
+ */
+export const group = async (req: Request, res: Response) => {
+	try {
+		return res.json({ message: 'Group endpoint' });
+	} catch (error) {
+		console.error('group error:', error);
+		return res.status(500).json({ error: 'Group failed' });
+	}
+};
+
+/**
+ * Members
+ */
+export const members = async (req: Request, res: Response) => {
+	try {
+		return res.json({ message: 'Members endpoint' });
+	} catch (error) {
+		console.error('members error:', error);
+		return res.status(500).json({ error: 'Members failed' });
+	}
+};
+
+/**
+ * Add Member
+ */
+export const addMember = async (req: Request, res: Response) => {
+	try {
+		const { email } = req.body;
+
+		if (!email) {
+			return res.status(400).json({ error: 'Email is required' });
+		}
+
+		return res.json({ message: `Member ${email} added` });
+	} catch (error) {
+		console.error('addMember error:', error);
+		return res.status(500).json({ error: 'Add member failed' });
+	}
+};
+
+/**
+ * Remove Member
+ */
+export const removeMember = async (req: Request, res: Response) => {
+	try {
+		const { email } = req.body;
+
+		if (!email) {
+			return res.status(400).json({ error: 'Email is required' });
+		}
+
+		return res.json({ message: `Member ${email} removed` });
+	} catch (error) {
+		console.error('removeMember error:', error);
+		return res.status(500).json({ error: 'Remove member failed' });
+	}
+};
+
+/**
+ * Create Shared Contact
+ */
+export const createSharedContact = async (req: Request, res: Response) => {
+	try {
+		return res.json({ message: 'Shared contact created' });
+	} catch (error) {
+		console.error('createSharedContact error:', error);
+		return res.status(500).json({ error: 'Create shared contact failed' });
+	}
+};
+
+/**
+ * Remove Shared Contact
+ */
+export const removeSharedContact = async (req: Request, res: Response) => {
+	try {
+		return res.json({ message: 'Shared contact removed' });
+	} catch (error) {
+		console.error('removeSharedContact error:', error);
+		return res.status(500).json({ error: 'Remove shared contact failed' });
+	}
+};

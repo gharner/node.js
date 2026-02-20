@@ -1,8 +1,8 @@
-import { DocumentReference, FieldValue } from '@google-cloud/firestore';
 import { Request, Response } from 'express';
+import { DocumentReference } from 'firebase-admin/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import twilio, { Twilio } from 'twilio';
-import { enterpriseDb } from '../modules';
+import { admin, dbDefault } from '../modules';
 
 /* ======================================================
    Secrets (Gen2 Safe)
@@ -30,7 +30,7 @@ export class TwilioController {
 	}
 
 	/* ======================================================
-	   Twilio Client (Lazy Init, Gen2 Safe)
+	   Twilio Client (Lazy Init)
 	====================================================== */
 
 	private getClient(): Twilio {
@@ -41,25 +41,47 @@ export class TwilioController {
 	}
 
 	/* ======================================================
+	   Twilio Signature Validation
+	====================================================== */
+
+	private validateSignature(req: Request, publicUrl: string): boolean {
+		const signature = req.headers['x-twilio-signature'] as string;
+
+		if (!signature) {
+			console.error('Missing X-Twilio-Signature header');
+			return false;
+		}
+
+		const isValid = twilio.validateRequest(TWILIO_AUTH_TOKEN.value(), signature, publicUrl, req.body);
+
+		if (!isValid) {
+			console.error('Twilio signature validation FAILED');
+			console.error('URL used:', publicUrl);
+			console.error('Params:', req.body);
+		}
+
+		return isValid;
+	}
+
+	/* ======================================================
 	   Firestore-triggered outbound SMS
-	   (Enterprise DB only)
 	====================================================== */
 
 	public async processFirestoreMessage(docRef: DocumentReference): Promise<void> {
-		const snap = await docRef.get();
+		const defaultDocRef = dbDefault.doc(docRef.path);
+		const snap = await defaultDocRef.get();
 		const data = snap.data();
 
 		if (!data) return;
-
-		if (data.status === 'processing') return;
+		if (data.status === 'processing' || data.status === 'sent') return;
 
 		const { to, body, mediaUrls } = data;
 
 		if (!to || !body) {
-			await docRef.update({
+			await defaultDocRef.update({
 				status: 'error',
 				errorMessage: 'Missing required fields: to and/or body',
-				updatedAt: FieldValue.serverTimestamp(),
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 			});
 			return;
 		}
@@ -67,9 +89,9 @@ export class TwilioController {
 		const client = this.getClient();
 
 		try {
-			await docRef.update({
+			await defaultDocRef.update({
 				status: 'processing',
-				updatedAt: FieldValue.serverTimestamp(),
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 			});
 
 			const message = await client.messages.create({
@@ -79,46 +101,55 @@ export class TwilioController {
 				...(Array.isArray(mediaUrls) && mediaUrls.length ? { mediaUrl: mediaUrls } : {}),
 			});
 
-			await docRef.update({
+			await defaultDocRef.update({
 				status: 'sent',
 				sid: message.sid,
-				dateSent: FieldValue.serverTimestamp(),
-				updatedAt: FieldValue.serverTimestamp(),
+				dateSent: admin.firestore.FieldValue.serverTimestamp(),
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 			});
 		} catch (error: any) {
-			await docRef.update({
+			await defaultDocRef.update({
 				status: 'error',
 				errorMessage: error?.message || String(error),
-				updatedAt: FieldValue.serverTimestamp(),
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 			});
 			throw error;
 		}
 	}
 
 	/* ======================================================
-	   Twilio Signature Validation (CRITICAL)
+	   Twilio Inbound Webhook
 	====================================================== */
 
-	private validateSignature(req: Request): boolean {
-		const signature = req.headers['x-twilio-signature'] as string;
-		if (!signature) return false;
+	public async handleInboundWebhook(req: Request, res: Response): Promise<void> {
+		const publicUrl = 'https://twilio-agwzindyha-uc.a.run.app/v1/inbound';
 
-		const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+		if (!this.validateSignature(req, publicUrl)) {
+			res.status(403).send('Invalid Twilio signature');
+			return;
+		}
 
-		// Twilio needs the raw body string. If Express.raw was used, req.body is a Buffer.
-		const raw = (req as any).rawBody ? (req as any).rawBody.toString('utf8') : Buffer.isBuffer(req.body) ? req.body.toString('utf8') : req.body;
+		const { From, Body, MessageSid } = req.body;
 
-		return twilio.validateRequest(TWILIO_AUTH_TOKEN.value(), signature, fullUrl, raw);
+		await dbDefault.collection('sms_inbound').add({
+			from: From || null,
+			body: Body || null,
+			sid: MessageSid || null,
+			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
+			raw: req.body || {},
+		});
+
+		res.type('text/xml').send('<Response></Response>');
 	}
 
 	/* ======================================================
 	   Twilio Delivery Status Webhook
-	   (Enterprise DB + Signature Validation)
 	====================================================== */
 
 	public async handleStatusWebhook(req: Request, res: Response): Promise<void> {
-		// ✅ Validate Twilio signature
-		if (!this.validateSignature(req)) {
+		const publicUrl = 'https://twilio-agwzindyha-uc.a.run.app/v1/status';
+
+		if (!this.validateSignature(req, publicUrl)) {
 			res.status(403).send('Invalid Twilio signature');
 			return;
 		}
@@ -132,70 +163,34 @@ export class TwilioController {
 		}
 
 		try {
-			/* ======================================================
-		   Replay Protection (Twilio may retry webhooks)
-		   Prevent processing same status more than once
-		====================================================== */
-
 			const eventKey = `${messageSid}:${messageStatus}`;
 
-			const existingEvent = await enterpriseDb.collection('twilio_webhook_events').doc(eventKey).get();
+			const existingEvent = await dbDefault.collection('twilio_webhook_events').doc(eventKey).get();
 
 			if (existingEvent.exists) {
-				// Already processed — acknowledge but do nothing
 				res.sendStatus(200);
 				return;
 			}
 
-			// Record event as processed
-			await enterpriseDb.collection('twilio_webhook_events').doc(eventKey).set({
+			await dbDefault.collection('twilio_webhook_events').doc(eventKey).set({
 				messageSid,
 				messageStatus,
-				processedAt: FieldValue.serverTimestamp(),
+				processedAt: admin.firestore.FieldValue.serverTimestamp(),
 			});
 
-			/* ======================================================
-		   Update Related SMS Document
-		====================================================== */
-
-			const snapshot = await enterpriseDb.collection('sms_messages').where('sid', '==', messageSid).limit(1).get();
+			const snapshot = await dbDefault.collection('sms_messages').where('sid', '==', messageSid).limit(1).get();
 
 			if (!snapshot.empty) {
 				await snapshot.docs[0].ref.update({
 					deliveryStatus: messageStatus,
-					statusUpdated: FieldValue.serverTimestamp(),
+					statusUpdated: admin.firestore.FieldValue.serverTimestamp(),
 				});
 			}
 
 			res.sendStatus(200);
 		} catch (error) {
-			// Log safely without leaking data
 			console.error('Twilio status webhook error:', error);
 			res.status(500).send('Failed to update delivery status');
 		}
-	}
-
-	/* ======================================================
-	   Twilio Inbound Webhook
-	   (Enterprise DB + Signature Validation)
-	====================================================== */
-
-	public async handleInboundWebhook(req: Request, res: Response): Promise<void> {
-		if (!this.validateSignature(req)) {
-			res.status(403).send('Invalid Twilio signature');
-			return;
-		}
-
-		const { From, Body, MessageSid } = req.body;
-
-		await enterpriseDb.collection('sms_inbound').add({
-			from: From || null,
-			body: Body || null,
-			sid: MessageSid || null,
-			receivedAt: FieldValue.serverTimestamp(),
-			raw: req.body || {},
-		});
-
-		res.type('text/xml').send('<Response></Response>');
 	}
 }

@@ -1,8 +1,7 @@
-import { FieldValue } from '@google-cloud/firestore';
 import * as Sentry from '@sentry/google-cloud-serverless';
 import moment from 'moment-timezone';
 import { AttendanceViolation, Program, Schedule } from '../interfaces';
-import { enterpriseDb } from '../modules';
+import { admin, enterpriseDb } from '../modules';
 
 /* ============================================================
    Interfaces
@@ -151,7 +150,7 @@ async function closeReservationSchedules(schedules: Schedule[]) {
 
 			batch.update(scheduleRef, {
 				eventType: 'closed',
-				updatedAt: FieldValue.serverTimestamp(),
+				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 			});
 		}
 
@@ -188,7 +187,7 @@ async function updateAttendanceViolations(violations: AttendanceViolation[]) {
 					summary: violation.summary,
 					scheduleId: violation.scheduleId,
 					action: violation.action ?? null,
-					updatedAt: FieldValue.serverTimestamp(),
+					updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 				},
 				{ merge: true },
 			);

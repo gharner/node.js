@@ -11,14 +11,8 @@ export const routes = [
 		name: 'gapi',
 		router: gapi,
 	},
-
 	{
 		name: 'sandbox',
 		router: sandbox,
-	},
-
-	{
-		name: 'twilio',
-		router: twilioRouter,
 	},
 ];

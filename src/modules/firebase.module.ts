@@ -1,18 +1,14 @@
-import { Firestore } from '@google-cloud/firestore';
 import * as admin from 'firebase-admin';
-
-export const enterpriseDb = new Firestore({
-	projectId: process.env.GCLOUD_PROJECT,
-	databaseId: 'default', //
-});
-
-export const db = new Firestore({
-	projectId: process.env.GCLOUD_PROJECT,
-	databaseId: '(default)',
-});
+import { getFirestore } from 'firebase-admin/firestore';
 
 if (!admin.apps.length) {
 	admin.initializeApp();
 }
 
-export { admin };
+// Default instance
+const dbDefault = admin.firestore();
+
+// Named instance (Replace 'enterprisedb' with your actual Database ID)
+const enterpriseDb = getFirestore('enterprisedb');
+
+export { admin, dbDefault, enterpriseDb };

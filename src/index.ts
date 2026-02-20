@@ -1,46 +1,24 @@
 import * as Sentry from '@sentry/google-cloud-serverless';
-import * as dotenv from 'dotenv';
 import Express from 'express';
 import { defineSecret } from 'firebase-functions/params';
 import { onDocumentCreated } from 'firebase-functions/v2/firestore';
 import { onRequest } from 'firebase-functions/v2/https';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import fs from 'fs';
 import path from 'path';
 import { dailyJobs, violationsJob } from './controllers';
 import { TwilioController } from './controllers/twilio.controller';
-import { cors, errorHandler } from './middleware';
+import { errorHandler } from './middleware';
 import { debugGuard } from './middleware/debug-guard.middleware';
 import { routes } from './routes';
 
 /* ======================================================
-   Load .env only in emulator
-====================================================== */
-
-(function loadLocalEnv() {
-	const isEmulator = !!process.env.FUNCTIONS_EMULATOR;
-	if (!isEmulator) return;
-
-	const forcedEnvFile = process.env.ENV_FILE?.trim();
-	const candidates = forcedEnvFile ? [forcedEnvFile] : ['.env.dev', '.env.gregharner', '.env'];
-
-	for (const file of candidates) {
-		const fullPath = path.resolve(process.cwd(), file);
-		if (fs.existsSync(fullPath)) {
-			dotenv.config({ path: fullPath });
-			console.log(`Loaded environment file: ${file}`);
-			break;
-		}
-	}
-})();
-
-/* ======================================================
-   Twilio Secrets (Gen2 Required)
+   Secrets (Gen2 Required)
 ====================================================== */
 
 const TWILIO_ACCOUNT_SID = defineSecret('TWILIO_ACCOUNT_SID');
 const TWILIO_AUTH_TOKEN = defineSecret('TWILIO_AUTH_TOKEN');
 const TWILIO_MESSAGING_SERVICE_SID = defineSecret('TWILIO_MESSAGING_SERVICE_SID');
+const MAS_DEBUG_KEY = defineSecret('MAS_DEBUG_KEY');
 
 /* ======================================================
    Sentry Setup
@@ -74,53 +52,52 @@ const wrapWithSentry = (fn: Function) => {
 routes.forEach(routerObj => {
 	const app = Express();
 
-	app.use(cors);
+	// 🔥 IMPORTANT: Required for correct Twilio URL reconstruction behind Firebase proxy
+	app.set('trust proxy', true);
+
 	app.set('views', path.join(__dirname, 'views'));
 	app.set('view engine', 'ejs');
 
-	/**
-	 * IMPORTANT:
-	 * Twilio webhook endpoints must use raw body parsing BEFORE JSON parsing.
-	 * This avoids breaking Twilio signature validation.
-	 */
 	const isTwilioRouter = routerObj.name.toLowerCase().includes('twilio');
 
 	if (isTwilioRouter) {
-		// Parse raw first (Twilio)
+		// Capture raw body for Twilio signature validation
 		const { twilioRawBody } = require('./middleware/twilio-raw-body.middleware');
 		app.use(twilioRawBody);
+
+		// Twilio sends application/x-www-form-urlencoded
+		app.use(Express.urlencoded({ extended: false }));
 	} else {
-		// Normal JSON parsing for all other routers
 		app.use(Express.json({ limit: '1mb' }));
 		app.use(Express.urlencoded({ extended: false }));
 	}
 
 	app.use(routerObj.router);
 
-	app.all('*', (req, res) => {
+	app.all('*', (_req, res) => {
 		res.status(404).json({ error: 'Route not found' });
 	});
 
 	app.use(errorHandler);
 
-	const needsTwilioSecrets = isTwilioRouter;
+	const options: any = {
+		region: 'us-central1',
+	};
 
-	exports[routerObj.name] = onRequest(
-		{
-			region: 'us-central1',
-			secrets: needsTwilioSecrets ? [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID] : undefined,
-		},
-		async (req, res) => {
-			try {
-				await new Promise((resolve, reject) => {
-					app(req, res, err => (err ? reject(err) : resolve(null)));
-				});
-			} catch (error) {
-				Sentry.captureException(error);
-				res.status(500).send('Internal Server Error');
-			}
-		},
-	);
+	if (isTwilioRouter) {
+		options.secrets = [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID];
+	}
+
+	exports[routerObj.name] = onRequest(options, async (req, res) => {
+		try {
+			await new Promise((resolve, reject) => {
+				app(req, res, err => (err ? reject(err) : resolve(null)));
+			});
+		} catch (error) {
+			Sentry.captureException(error);
+			res.status(500).send('Internal Server Error');
+		}
+	});
 });
 
 /* ======================================================
@@ -167,20 +144,14 @@ export const scheduledViolationsJob = onSchedule(
    Non-sensitive Environment Debug Endpoint
 ====================================================== */
 
-/**
- * Debug-only environment endpoint
- * 🚫 Disabled in production unless debug key is provided
- */
 export const currentEnvironment = onRequest(
 	{
 		region: 'us-central1',
-		secrets: ['MAS_DEBUG_KEY'],
+		secrets: [MAS_DEBUG_KEY],
 	},
 	async (request, response) => {
 		try {
-			// Protect this endpoint
 			debugGuard(request as any, response as any, () => {
-				// Only return very safe keys
 				const safeKeys = ['GCLOUD_PROJECT', 'FUNCTIONS_EMULATOR', 'NODE_ENV', 'LOCATION'];
 
 				const envVars: Record<string, string | undefined> = safeKeys.reduce(
@@ -201,7 +172,7 @@ export const currentEnvironment = onRequest(
 );
 
 /* ======================================================
-   Twilio Firestore Trigger (Gen2 + Secrets)
+   FIRESTORE TRIGGER
 ====================================================== */
 
 const twilioController = TwilioController.getInstance();
@@ -209,12 +180,12 @@ const twilioController = TwilioController.getInstance();
 export const sendMessage = onDocumentCreated(
 	{
 		document: 'sms_messages/{messageId}',
-		database: 'default', // ✅ ENTERPRISE DB TARGET
 		region: 'us-central1',
 		secrets: [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID],
 	},
 	async event => {
 		if (!event.data) return;
+
 		await twilioController.processFirestoreMessage(event.data.ref);
 	},
 );
